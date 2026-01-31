@@ -40,6 +40,96 @@ const getInHouseIssuedQtyTotal = (itemCode: string) => {
     return 0;
   }
 };
+
+// Get running total of In-House Issued Qty for an itemCode filtered by transaction type
+const getInHouseIssuedQtyByTransactionType = (itemCode: string, transactionType: string) => {
+  try {
+    const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
+    return inHouseIssues.reduce((total: number, issue: any) => {
+      if (Array.isArray(issue.items)) {
+        return (
+          total +
+          issue.items.reduce(
+            (sum: number, item: any) => {
+              const matches = item.itemCode === itemCode && 
+                            (item.transactionType === transactionType || transactionType === '*');
+              const qty = item.issueQty || item.qty || 0;
+              return matches && typeof qty === "number" ? sum + qty : sum;
+            },
+            0
+          )
+        );
+      }
+      return total;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
+
+// Get total In-House Issued Qty for an item matched by itemName OR itemCode (normalized) - includes all transaction types
+const getInHouseIssuedQtyByItemName = (itemName: string, itemCode?: string) => {
+  try {
+    const normalize = (s: any) => (s === undefined || s === null ? '' : String(s).trim().toLowerCase());
+    const targetName = normalize(itemName);
+    const targetCode = normalize(itemCode);
+    
+    const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
+    return inHouseIssues.reduce((total: number, issue: any) => {
+      if (Array.isArray(issue.items)) {
+        return (
+          total +
+          issue.items.reduce(
+            (sum: number, item: any) => {
+              const name = normalize(item.itemName || '');
+              const code = normalize(item.itemCode || '');
+              const matched = (targetName && name === targetName) || (targetCode && code === targetCode);
+              const qty = item.issueQty || item.qty || 0;
+              return matched && typeof qty === "number" ? sum + qty : sum;
+            },
+            0
+          )
+        );
+      }
+      return total;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
+
+// Get In-House Issued Qty for an item - ONLY Stock transaction type (for Closing Stock calculation)
+const getInHouseIssuedQtyByItemNameStockOnly = (itemName: string, itemCode?: string) => {
+  try {
+    const normalize = (s: any) => (s === undefined || s === null ? '' : String(s).trim().toLowerCase());
+    const targetName = normalize(itemName);
+    const targetCode = normalize(itemCode);
+    
+    const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
+    return inHouseIssues.reduce((total: number, issue: any) => {
+      if (Array.isArray(issue.items)) {
+        return (
+          total +
+          issue.items.reduce(
+            (sum: number, item: any) => {
+              const name = normalize(item.itemName || '');
+              const code = normalize(item.itemCode || '');
+              const matched = (targetName && name === targetName) || (targetCode && code === targetCode);
+              const isStockType = item.transactionType === 'Stock';
+              const qty = item.issueQty || item.qty || 0;
+              return matched && isStockType && typeof qty === "number" ? sum + qty : sum;
+            },
+            0
+          )
+        );
+      }
+      return total;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
+
 // Get running total of vendor dept qty for an itemCode from all vendor dept orders
 const getVendorDeptQtyTotal = (itemCode: string) => {
   try {
@@ -61,6 +151,53 @@ const getVendorDeptQtyTotal = (itemCode: string) => {
     return 0;
   }
 };
+
+// Get running total of VSIR received qty (OK + Rework + Reject) for an itemCode from all VSIR records
+const getVSIRReceivedQtyTotal = (itemCode: string) => {
+  try {
+    const vsirRecords = JSON.parse(localStorage.getItem("vsri-records") || "[]");
+    return vsirRecords.reduce((total: number, record: any) => {
+      if (record.itemCode === itemCode) {
+        const okQty = typeof record.okQty === "number" ? record.okQty : 0;
+        const reworkQty = typeof record.reworkQty === "number" ? record.reworkQty : 0;
+        const rejectQty = typeof record.rejectQty === "number" ? record.rejectQty : 0;
+        return total + okQty + reworkQty + rejectQty;
+      }
+      return total;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
+
+// Get adjusted vendor issued qty (after subtracting VSIR received quantities)
+const getAdjustedVendorIssuedQty = (itemCode: string) => {
+  const vendorIssuedTotal = getVendorIssuedQtyTotal(itemCode) || 0;
+  const vsirReceivedTotal = getVSIRReceivedQtyTotal(itemCode) || 0;
+  return Math.max(0, vendorIssuedTotal - vsirReceivedTotal);
+};
+
+// Get in-house issued qty by batch number from IN-House Issue Module
+const getInHouseIssuedQtyByBatch = (batchNo: string) => {
+  try {
+    const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
+    return inHouseIssues.reduce((total: number, issue: any) => {
+      if (Array.isArray(issue.items)) {
+        return (
+          total +
+          issue.items.reduce(
+            (sum: number, item: any) =>
+              item.batchNo === batchNo && typeof item.issueQty === "number" ? sum + item.issueQty : sum,
+            0
+          )
+        );
+      }
+      return total;
+    }, 0);
+  } catch {
+    return 0;
+  }
+};
 import React, { useState, useEffect } from "react";
 import bus from '../utils/eventBus';
 
@@ -68,6 +205,7 @@ interface StockRecord {
   id: number;
   itemName: string;
   itemCode: string;
+  batchNo: string;
   stockQty: number;
   indentQty: number;
   purchaseQty: number;
@@ -76,7 +214,6 @@ interface StockRecord {
   vendorOkQty: number;
   inHouseIssuedQty: number;
   vendorIssuedQty: number;
-  purchaseActualQtyInStore: number;
   closingStock: number;
 }
 
@@ -85,6 +222,7 @@ const LOCAL_STORAGE_KEY = "stock-records";
 const STOCK_MODULE_FIELDS = [
   { key: "itemName", label: "Item Name", type: "text" },
   { key: "itemCode", label: "Item Code", type: "text" },
+  { key: "batchNo", label: "Batch No", type: "text" },
   { key: "stockQty", label: "Stock Qty", type: "number" },
   { key: "indentQty", label: "Indent Qty", type: "number", readOnly: true },
   { key: "purchaseQty", label: "Purchase Qty", type: "number", readOnly: true },
@@ -93,7 +231,6 @@ const STOCK_MODULE_FIELDS = [
   { key: "vendorOkQty", label: "Vendor OK Qty", type: "number", readOnly: true },
   { key: "inHouseIssuedQty", label: "In-House Issued Qty", type: "number" },
   { key: "vendorIssuedQty", label: "Vendor Issued Qty", type: "number" },
-  { key: "purchaseActualQtyInStore", label: "Purchase Actual Qty in Store", type: "number" },
   { key: "closingStock", label: "Closing Stock", type: "number" }
 ];
 // Get running total of Vendor OK Qty for an itemCode from all vendor dept orders
@@ -116,6 +253,19 @@ const getVendorDeptOkQtyTotal = (itemCode: string) => {
   } catch {
     return 0;
   }
+};
+
+// Get adjusted Vendor OK Qty (Vendor Dept OK Qty - In-House Issued where transactionType='Vendor')
+const getAdjustedVendorOkQty = (itemCode?: string) => {
+  const vendorDeptOkQty = getVendorDeptOkQtyTotal(itemCode || "") || 0;
+  
+  // Subtract ONLY in-house issued quantities where transactionType='Vendor'
+  const totalInHouseIssuedVendor = getInHouseIssuedQtyByTransactionType(itemCode || "", "Vendor") || 0;
+  
+  const result = Math.max(0, vendorDeptOkQty - totalInHouseIssuedVendor);
+
+  console.log('[DEBUG] getAdjustedVendorOkQty:', { itemCode, vendorDeptOkQty, totalInHouseIssuedVendor, result });
+  return result;
 };
 
 // Get running total of indent qty for an itemCode from all indents
@@ -168,6 +318,7 @@ const getPurchaseQtyTotal = (itemCode: string) => {
 const defaultItemInput: Omit<StockRecord, "id"> = {
   itemName: "",
   itemCode: "",
+  batchNo: "",
   stockQty: 0,
   indentQty: 0,
   purchaseQty: 0,
@@ -176,7 +327,6 @@ const defaultItemInput: Omit<StockRecord, "id"> = {
   vendorOkQty: 0,
   inHouseIssuedQty: 0,
   vendorIssuedQty: 0,
-  purchaseActualQtyInStore: 0,
   closingStock: 0,
 };
 
@@ -195,6 +345,8 @@ const StockModule: React.FC = () => {
   const [lastPsirEventAt, setLastPsirEventAt] = useState<string>('');
   const [lastPsirDetail, setLastPsirDetail] = useState<any>(null);
   const [lastStorageEventAt, setLastStorageEventAt] = useState<string>('');
+  const [showDebugPanel, setShowDebugPanel] = useState<boolean>(true);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
 
   // Listen for changes in relevant localStorage keys and reload or force re-render
   useEffect(() => {
@@ -205,7 +357,7 @@ const StockModule: React.FC = () => {
         } catch {
           setRecords([]);
         }
-      } else if (['indentData', 'purchaseOrders', 'vendorDeptData', 'psirData', 'inHouseIssueData', 'vendorIssueData'].includes(e.key || '')) {
+      } else if (['indentData', 'purchaseOrders', 'vendorDeptData', 'psirData', 'inHouseIssueData', 'vendorIssueData', 'vsri-records'].includes(e.key || '')) {
         // Force re-render for calculated fields
         if (e.key === 'psirData') setLastStorageEventAt(new Date().toISOString());
         setRecords(prev => [...prev]);
@@ -249,6 +401,34 @@ const StockModule: React.FC = () => {
     }
   }, []);
 
+  // Update debug panel when item input changes
+  useEffect(() => {
+    if (itemInput.itemName || itemInput.itemCode) {
+      const psirOkQty = getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0;
+      const totalInHouseIssuedPurchase = getInHouseIssuedQtyByTransactionType(itemInput.itemCode || "", "Purchase") || 0;
+      const vendorIssuedQty = getAdjustedVendorIssuedQty(itemInput.itemCode || "") || 0;
+      const purStoreOkQty = Math.max(0, psirOkQty - totalInHouseIssuedPurchase - vendorIssuedQty);
+      
+      const vendorDeptOkQty = getVendorDeptOkQtyTotal(itemInput.itemCode || "") || 0;
+      const totalInHouseIssuedVendor = getInHouseIssuedQtyByTransactionType(itemInput.itemCode || "", "Vendor") || 0;
+      const vendorOkQty = Math.max(0, vendorDeptOkQty - totalInHouseIssuedVendor);
+      
+      setDebugInfo({
+        itemName: itemInput.itemName,
+        itemCode: itemInput.itemCode,
+        psirOkQty: psirOkQty,
+        totalInHouseIssuedPurchase: totalInHouseIssuedPurchase,
+        vendorIssuedQty: vendorIssuedQty,
+        purStoreOkQty: purStoreOkQty,
+        vendorDeptOkQty: vendorDeptOkQty,
+        totalInHouseIssuedVendor: totalInHouseIssuedVendor,
+        vendorOkQty: vendorOkQty
+      });
+    } else {
+      setDebugInfo(null);
+    }
+  }, [itemInput.itemName, itemInput.itemCode, draftPsirItems]);
+
   // Persist records
   useEffect(() => {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(records));
@@ -267,6 +447,8 @@ const StockModule: React.FC = () => {
       const psirs = JSON.parse(localStorage.getItem("psirData") || "[]");
       const targetName = normalize(itemName);
       const targetCode = normalize(itemCode);
+
+      console.log('[DEBUG] getPSIROkQtyTotal called:', { itemName, itemCode, targetName, targetCode });
 
       const totalFromPsirs = psirs.reduce((total: number, psir: any) => {
         if (Array.isArray(psir.items)) {
@@ -288,6 +470,8 @@ const StockModule: React.FC = () => {
         return total;
       }, 0);
 
+      console.log('[DEBUG] totalFromPsirs:', totalFromPsirs);
+
       // include any draft PSIR items (added in current session but not yet persisted)
       const draftTotal = (draftPsirItems || []).reduce((sum: number, it: any) => {
         const name = normalize(it.itemName || it.Item || '');
@@ -301,10 +485,28 @@ const StockModule: React.FC = () => {
         return sum;
       }, 0);
 
+      console.log('[DEBUG] result:', totalFromPsirs + draftTotal);
       return totalFromPsirs + draftTotal;
-    } catch {
+    } catch (e) {
+      console.error('[DEBUG] Error in getPSIROkQtyTotal:', e);
       return 0;
     }
+  };
+
+  // Get adjusted Pur Store OK Qty (PSIR OK Qty - In-House Issued Purchase - Vendor Issued Qty)
+  const getAdjustedPurStoreOkQty = (itemName: string, itemCode?: string, batchNo?: string) => {
+    const psirOkQty = getPSIROkQtyTotal(itemName, itemCode) || 0;
+    
+    // Subtract in-house issued quantities where transactionType='Purchase'
+    const totalInHouseIssuedPurchase = getInHouseIssuedQtyByTransactionType(itemCode || "", "Purchase") || 0;
+    
+    // Subtract total vendor issued qty from Vendor Issue Module (don't adjust by VSIR received)
+    const vendorIssuedQty = getVendorIssuedQtyTotal(itemCode || "") || 0;
+    
+    const result = Math.max(0, psirOkQty - totalInHouseIssuedPurchase - vendorIssuedQty);
+
+    console.log('[DEBUG] getAdjustedPurStoreOkQty:', { itemName, itemCode, psirOkQty, totalInHouseIssuedPurchase, vendorIssuedQty, result });
+    return result;
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -330,26 +532,43 @@ const StockModule: React.FC = () => {
       alert("Item Name is required.");
       return;
     }
-    // Auto-calculate all fields except itemName/itemCode/stockQty
+    // Auto-calculate all fields except itemName/itemCode/stockQty/batchNo
     const vendorIssuedTotal = getVendorIssuedQtyTotal(itemInput.itemCode) || 0;
     const vendorDeptTotal = getVendorDeptQtyTotal(itemInput.itemCode) || 0;
+    const vsirReceivedTotal = getVSIRReceivedQtyTotal(itemInput.itemCode) || 0;
+    // Subtract VSIR received quantities from vendor issued qty
+    const vendorIssuedQtyAdjusted = Math.max(0, vendorIssuedTotal - vsirReceivedTotal);
+    // Get adjusted Pur Store OK Qty (subtract in-house issued qty by batch no)
+    const purStoreOkQtyAdjusted = getAdjustedPurStoreOkQty(itemInput.itemName, itemInput.itemCode, itemInput.batchNo) || 0;
+    const inHouseIssuedStockOnly = getInHouseIssuedQtyByItemNameStockOnly(itemInput.itemName, itemInput.itemCode) || 0;
     const autoRecord = {
       ...itemInput,
       indentQty: getIndentQtyTotal(itemInput.itemCode) || 0,
       purchaseQty: getPurchaseQtyTotal(itemInput.itemCode) || 0,
       vendorQty: Math.max(0, vendorDeptTotal - vendorIssuedTotal), // Deduct issued qty from vendor dept qty
-      purStoreOkQty: getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0,
-      vendorOkQty: getVendorDeptOkQtyTotal(itemInput.itemCode) || 0,
-      inHouseIssuedQty: getInHouseIssuedQtyTotal(itemInput.itemCode) || 0,
-      vendorIssuedQty: vendorIssuedTotal,
-      purchaseActualQtyInStore: (getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0) - (getVendorIssuedQtyTotal(itemInput.itemCode) || 0),
+      purStoreOkQty: purStoreOkQtyAdjusted,
+      vendorOkQty: getAdjustedVendorOkQty(itemInput.itemCode) || 0,
+      inHouseIssuedQty: getInHouseIssuedQtyByItemName(itemInput.itemName, itemInput.itemCode) || 0,
+      vendorIssuedQty: vendorIssuedQtyAdjusted,
       closingStock:
         (Number(itemInput.stockQty) || 0)
-        + (getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0)
-        + (getVendorDeptOkQtyTotal(itemInput.itemCode) || 0)
-        - (getInHouseIssuedQtyTotal(itemInput.itemCode) || 0)
-        - (getVendorIssuedQtyTotal(itemInput.itemCode) || 0),
+        + (purStoreOkQtyAdjusted)
+        + (getAdjustedVendorOkQty(itemInput.itemCode) || 0)
+        - (inHouseIssuedStockOnly),
     };
+
+    console.log('[DEBUG] handleSubmit - Full Payload:', {
+      itemInput: itemInput,
+      calculations: {
+        vendorIssuedTotal,
+        vendorDeptTotal,
+        vsirReceivedTotal,
+        vendorIssuedQtyAdjusted,
+        purStoreOkQtyAdjusted
+      },
+      autoRecord: autoRecord
+    });
+
     if (editIdx !== null) {
       setRecords((prev) =>
         prev.map((rec, idx) =>
@@ -420,11 +639,27 @@ const StockModule: React.FC = () => {
                 readOnly
                 style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
               />
+            ) : field.key === "purStoreOkQty" ? (
+              <input
+                type="number"
+                name="purStoreOkQty"
+                value={getAdjustedPurStoreOkQty(itemInput.itemName, itemInput.itemCode, itemInput.batchNo) || 0}
+                readOnly
+                style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
+              />
+            ) : field.key === "vendorOkQty" ? (
+              <input
+                type="number"
+                name="vendorOkQty"
+                value={getAdjustedVendorOkQty(itemInput.itemCode) || 0}
+                readOnly
+                style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
+              />
             ) : field.key === "inHouseIssuedQty" ? (
               <input
                 type="number"
                 name="inHouseIssuedQty"
-                value={getInHouseIssuedQtyTotal(itemInput.itemCode) || 0}
+                value={getInHouseIssuedQtyByItemName(itemInput.itemName, itemInput.itemCode) || 0}
                 readOnly
                 style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
               />
@@ -432,17 +667,7 @@ const StockModule: React.FC = () => {
               <input
                 type="number"
                 name="vendorIssuedQty"
-                value={getVendorIssuedQtyTotal(itemInput.itemCode) || 0}
-                readOnly
-                style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
-              />
-            ) : field.key === "purchaseActualQtyInStore" ? (
-              <input
-                type="number"
-                name="purchaseActualQtyInStore"
-                value={
-                  (getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0) - (getVendorIssuedQtyTotal(itemInput.itemCode) || 0)
-                }
+                value={getAdjustedVendorIssuedQty(itemInput.itemCode) || 0}
                 readOnly
                 style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
               />
@@ -452,10 +677,9 @@ const StockModule: React.FC = () => {
                 name="closingStock"
                 value={
                   (Number(itemInput.stockQty) || 0)
-                          + (getPSIROkQtyTotal(itemInput.itemName, itemInput.itemCode) || 0)
-                  + (getVendorDeptOkQtyTotal(itemInput.itemCode) || 0)
-                  - (getInHouseIssuedQtyTotal(itemInput.itemCode) || 0)
-                  - (getVendorIssuedQtyTotal(itemInput.itemCode) || 0)
+                          + (getAdjustedPurStoreOkQty(itemInput.itemName, itemInput.itemCode, itemInput.batchNo) || 0)
+                  + (getAdjustedVendorOkQty(itemInput.itemCode) || 0)
+                  - (getInHouseIssuedQtyByItemNameStockOnly(itemInput.itemName, itemInput.itemCode) || 0)
                 }
                 readOnly
                 style={{ width: "100%", padding: 6, borderRadius: 4, border: "1px solid #bbb", background: "#eee" }}
@@ -489,15 +713,98 @@ const StockModule: React.FC = () => {
         </button>
       </form>
 
-      <div style={{ marginBottom: 12, padding: 8, background: '#fff8e1', border: '1px solid #ffecb3', borderRadius: 6 }}>
-        <strong>Debug</strong>
-        <div>Last psir.updated event: {lastPsirEventAt || '(none)'}</div>
-        <div>Last psirData storage event: {lastStorageEventAt || '(none)'}</div>
-        {lastPsirDetail && (
-          <details style={{ marginTop: 8 }}>
-            <summary>Last psir.updated detail</summary>
-            <pre style={{ maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(lastPsirDetail, null, 2)}</pre>
-          </details>
+      <div style={{ marginBottom: 12, padding: 12, background: showDebugPanel ? '#e3f2fd' : '#f5f5f5', border: '2px solid #1976d2', borderRadius: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <strong style={{ fontSize: '16px' }}>🐛 DEBUG PANEL - Pur Store OK Qty Calculation</strong>
+          <button 
+            onClick={() => setShowDebugPanel(!showDebugPanel)}
+            style={{
+              padding: '6px 12px',
+              background: '#1976d2',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            {showDebugPanel ? 'Hide' : 'Show'}
+          </button>
+        </div>
+
+        {showDebugPanel && (
+          <div style={{ background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #90caf9' }}>
+            {debugInfo ? (
+              <div>
+                <div style={{ marginBottom: 12, padding: 8, background: '#f3e5f5', borderRadius: 4 }}>
+                  <strong>Current Item:</strong> {debugInfo.itemName || '(none)'} [{debugInfo.itemCode || '(none)'}]
+                </div>
+
+                <div style={{ marginBottom: 12, padding: 8, background: '#fff3e0', borderRadius: 4 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#f57c00' }}>PSIR OK Qty Calculation:</strong>
+                  <div style={{ marginLeft: 16 }}>
+                    <div>Total PSIR OK Qty: <strong style={{ color: '#f57c00', fontSize: '16px' }}>{debugInfo.psirOkQty || 0}</strong></div>
+                    {debugInfo.psirItems && debugInfo.psirItems.length > 0 && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary>Breakdown ({debugInfo.psirItems.length} items)</summary>
+                        <div style={{ marginLeft: 16, marginTop: 8 }}>
+                          {debugInfo.psirItems.map((item: any, idx: number) => (
+                            <div key={idx} style={{ padding: 6, background: '#ffe0b2', marginBottom: 4, borderRadius: 4, fontSize: '12px' }}>
+                              <div><strong>{item.itemName}</strong> [{item.itemCode}] {item.isDraft ? '(DRAFT)' : ''}</div>
+                              <div>okQty: {item.okQty}, qtyReceived: {item.qtyReceived} → Using: <strong>{item.usedValue}</strong></div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 12, padding: 8, background: '#e8f5e9', borderRadius: 4 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#2e7d32' }}>In-House Issued Qty - Transaction Type: "Purchase" (Deduction):</strong>
+                  <div style={{ marginLeft: 16 }}>
+                    Total In-House Issued (Purchase): <strong style={{ color: '#2e7d32', fontSize: '16px' }}>{debugInfo.totalInHouseIssuedPurchase || 0}</strong>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 12, padding: 8, background: '#ffe0b2', borderRadius: 4 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#e65100' }}>Vendor Issued Qty - From Vendor Issue Module (Deduction):</strong>
+                  <div style={{ marginLeft: 16 }}>
+                    Total Vendor Issued: <strong style={{ color: '#e65100', fontSize: '16px' }}>{debugInfo.vendorIssuedQty || 0}</strong>
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, background: '#c8e6c9', borderRadius: 4, border: '2px solid #2e7d32', marginBottom: 12 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#1b5e20', fontSize: '16px' }}>Final Pur Store OK Qty:</strong>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#1b5e20' }}>
+                    {debugInfo.psirOkQty || 0} - {debugInfo.totalInHouseIssuedPurchase || 0} - {debugInfo.vendorIssuedQty || 0} = <span style={{ color: '#d32f2f', fontSize: '24px' }}>{debugInfo.purStoreOkQty || 0}</span>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 12, padding: 8, background: '#f3e0f5', borderRadius: 4 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#7b1fa2' }}>Vendor Dept OK Qty - Transaction Type: "Vendor" Deduction:</strong>
+                  <div style={{ marginLeft: 16 }}>
+                    Vendor Dept OK Qty: <strong style={{ color: '#7b1fa2', fontSize: '16px' }}>{debugInfo.vendorDeptOkQty || 0}</strong>
+                    <div style={{ marginTop: 4 }}>In-House Issued (Vendor): <strong style={{ color: '#7b1fa2', fontSize: '16px' }}>{debugInfo.totalInHouseIssuedVendor || 0}</strong></div>
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, background: '#e1bee7', borderRadius: 4, border: '2px solid #7b1fa2', marginBottom: 12 }}>
+                  <strong style={{ display: 'block', marginBottom: 4, color: '#4a148c', fontSize: '16px' }}>Final Vendor OK Qty:</strong>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4a148c' }}>
+                    {debugInfo.vendorDeptOkQty || 0} - {debugInfo.totalInHouseIssuedVendor || 0} = <span style={{ color: '#d32f2f', fontSize: '28px' }}>{debugInfo.vendorOkQty || 0}</span>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12, padding: 8, background: '#eceff1', borderRadius: 4, fontSize: '12px' }}>
+                  <div>Last psir.updated event: {lastPsirEventAt || '(none)'}</div>
+                  <div>Last psirData storage event: {lastStorageEventAt || '(none)'}</div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: '#666', fontStyle: 'italic' }}>Enter an item and its values will appear here...</div>
+            )}
+          </div>
         )}
       </div>
 
@@ -521,7 +828,7 @@ const StockModule: React.FC = () => {
                 {STOCK_MODULE_FIELDS.map((field) => (
                   <td key={field.key} style={{ border: "1px solid #eee", padding: 8 }}>
                     {field.key === "purStoreOkQty"
-                      ? getPSIROkQtyTotal(rec.itemName, rec.itemCode)
+                      ? getAdjustedPurStoreOkQty(rec.itemName, rec.itemCode, rec.batchNo)
                       : field.key === "indentQty"
                       ? getIndentQtyTotal(rec.itemCode)
                       : field.key === "purchaseQty"
@@ -529,19 +836,16 @@ const StockModule: React.FC = () => {
                       : field.key === "vendorQty"
                       ? Math.max(0, (getVendorDeptQtyTotal(rec.itemCode) || 0) - (getVendorIssuedQtyTotal(rec.itemCode) || 0))
                       : field.key === "vendorOkQty"
-                      ? getVendorDeptOkQtyTotal(rec.itemCode)
+                      ? getAdjustedVendorOkQty(rec.itemCode)
                       : field.key === "inHouseIssuedQty"
-                      ? getInHouseIssuedQtyTotal(rec.itemCode)
+                      ? getInHouseIssuedQtyByItemName(rec.itemName, rec.itemCode)
                       : field.key === "vendorIssuedQty"
-                      ? getVendorIssuedQtyTotal(rec.itemCode)
-                      : field.key === "purchaseActualQtyInStore"
-                      ? (getPSIROkQtyTotal(rec.itemName, rec.itemCode) || 0) - (getVendorIssuedQtyTotal(rec.itemCode) || 0)
+                      ? getAdjustedVendorIssuedQty(rec.itemCode)
                       : field.key === "closingStock"
                       ? ((Number(rec.stockQty) || 0)
-                          + (getPSIROkQtyTotal(rec.itemName, rec.itemCode) || 0)
-                          + (getVendorDeptOkQtyTotal(rec.itemCode) || 0)
-                          - (getInHouseIssuedQtyTotal(rec.itemCode) || 0)
-                          - (getVendorIssuedQtyTotal(rec.itemCode) || 0))
+                          + (getAdjustedPurStoreOkQty(rec.itemName, rec.itemCode, rec.batchNo) || 0)
+                          + (getAdjustedVendorOkQty(rec.itemCode) || 0)
+                          - (getInHouseIssuedQtyByItemNameStockOnly(rec.itemName, rec.itemCode) || 0))
                       : (rec as any)[field.key]}
                   </td>
                 ))}

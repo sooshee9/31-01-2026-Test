@@ -15,6 +15,7 @@ interface InHouseIssueItem {
 interface InHouseIssue {
   reqNo: string;
   reqDate: string;
+  indentNo: string;
   oaNo: string;
   poNo: string;
   vendor: string;
@@ -25,7 +26,7 @@ interface InHouseIssue {
 }
 
 const reqByOptions = ['HKG', 'NGR', 'MDD'];
-const transactionTypeOptions = ['Purchase', 'Vendor'];
+const transactionTypeOptions = ['Purchase', 'Vendor', 'Stock'];
 
 function getNextReqNo(issues: InHouseIssue[]) {
   const base = 'Req-No-';
@@ -71,6 +72,7 @@ const InHouseIssueModule: React.FC = () => {
   const [newIssue, setNewIssue] = useState<InHouseIssue>({
     reqNo: getNextReqNo([]),
     reqDate: '',
+    indentNo: '',
     oaNo: '',
     poNo: '',
     vendor: '',
@@ -97,8 +99,10 @@ const InHouseIssueModule: React.FC = () => {
   const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
   const [psirBatchNos, setPsirBatchNos] = useState<string[]>([]);
   const [vsirBatchNos, setVsirBatchNos] = useState<string[]>([]);
+  const [stockQuantities, setStockQuantities] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [vendorBatchNos, setVendorBatchNos] = useState<string[]>([]);
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
 
   // Helper: Get batch numbers for selected vendor
   const getVendorBatchNos = (vendor: string): string[] => {
@@ -135,34 +139,41 @@ const InHouseIssueModule: React.FC = () => {
         return [];
       }
       
+      console.log('[InHouse] 🔍 Searching VSIR for item code:', itemCode);
+      
       const vsirDataRaw = localStorage.getItem('vsri-records');
       if (!vsirDataRaw) {
-        console.log('[InHouse] No VSIR data found in localStorage');
+        console.log('[InHouse] ❌ No VSIR data found in localStorage');
         return [];
       }
       
       const vsirData = JSON.parse(vsirDataRaw);
+      console.log('[InHouse] 📊 Loaded VSIR records count:', Array.isArray(vsirData) ? vsirData.length : 'not-array');
+      
       if (!Array.isArray(vsirData)) {
-        console.log('[InHouse] VSIR data is not an array');
+        console.log('[InHouse] ❌ VSIR data is not an array');
         return [];
       }
       
       const batchNos = new Set<string>();
-      vsirData.forEach((record: any) => {
+      vsirData.forEach((record: any, idx: number) => {
+        console.log(`[InHouse] 📝 Record ${idx}: itemCode=${record.itemCode}, Code=${record.Code}, vendorBatchNo=${record.vendorBatchNo}`);
         // Check if this VSIR record contains the item and has vendorBatchNo
         if ((record.itemCode && record.itemCode === itemCode) || (record.Code && record.Code === itemCode)) {
           if (record.vendorBatchNo && record.vendorBatchNo.trim()) {
-            console.log('[InHouse] Found vendor batch no for item', itemCode, ':', record.vendorBatchNo);
+            console.log('[InHouse] ✅ Found vendor batch no for item', itemCode, ':', record.vendorBatchNo);
             batchNos.add(record.vendorBatchNo);
+          } else {
+            console.log('[InHouse] ⚠️  Item matched but vendorBatchNo is empty or missing');
           }
         }
       });
       
       const result = Array.from(batchNos).sort();
-      console.log('[InHouse] All VSIR batch nos for', itemCode, ':', result);
+      console.log('[InHouse] 📋 Final VSIR batch nos for', itemCode, ':', result, '(count:', result.length, ')');
       return result;
     } catch (e) {
-      console.error('[InHouse] Error getting VSIR batch nos:', e);
+      console.error('[InHouse] ❌ Error getting VSIR batch nos:', e);
       return [];
     }
   };
@@ -243,17 +254,28 @@ const InHouseIssueModule: React.FC = () => {
 
   // Update batch numbers when transaction type or item code changes
   useEffect(() => {
+    console.log('[InHouse] 🔄 Batch update useEffect triggered. transactionType:', itemInput.transactionType, 'itemCode:', itemInput.itemCode);
+    
     if (itemInput.transactionType === 'Purchase' && itemInput.itemCode) {
       const batchNos = getPsirBatchNosForItem(itemInput.itemCode);
       setPsirBatchNos(batchNos);
       setVsirBatchNos([]);
-      console.log('[InHouse] Updated PSIR batch nos for', itemInput.itemCode, ':', batchNos);
+      console.log('[InHouse] ✅ Updated PSIR batch nos for', itemInput.itemCode, ':', batchNos);
     } else if (itemInput.transactionType === 'Vendor' && itemInput.itemCode) {
+      console.log('[InHouse] 🎯 Transaction Type is VENDOR - calling getVsirBatchNosForItem');
       const batchNos = getVsirBatchNosForItem(itemInput.itemCode);
       setVsirBatchNos(batchNos);
       setPsirBatchNos([]);
-      console.log('[InHouse] Updated VSIR batch nos for', itemInput.itemCode, ':', batchNos);
+      console.log('[InHouse] ✅ Updated VSIR batch nos for', itemInput.itemCode, ':', batchNos);
+    } else if (itemInput.transactionType === 'Stock' && itemInput.itemCode) {
+      // For Stock type, get stock quantities
+      const stockQtys = getStockQuantities(itemInput.itemCode);
+      setStockQuantities(stockQtys);
+      setPsirBatchNos([]);
+      setVsirBatchNos([]);
+      console.log('[InHouse] ✅ Updated Stock quantities for', itemInput.itemCode, ':', stockQtys);
     } else {
+      console.log('[InHouse] ⚠️  No batch type matched or missing itemCode');
       setPsirBatchNos([]);
       setVsirBatchNos([]);
     }
@@ -268,6 +290,248 @@ const InHouseIssueModule: React.FC = () => {
       setVendorBatchNos([]);
     }
   }, [newIssue.vendor]);
+
+  // Helper: Get stock quantities for selected item code
+  const getStockQuantities = (itemCode: string): string[] => {
+    try {
+      if (!itemCode || !itemCode.trim()) {
+        return [];
+      }
+      const stockDataRaw = localStorage.getItem('stock-records');
+      if (!stockDataRaw) {
+        return [];
+      }
+      const stockData = JSON.parse(stockDataRaw);
+      if (!Array.isArray(stockData)) {
+        return [];
+      }
+      const quantities = stockData
+        .filter((record: any) => record.itemCode === itemCode && record.closingStock > 0)
+        .map((record: any) => `${record.closingStock}`);
+      return [...new Set(quantities)]; // Remove duplicates
+    } catch (e) {
+      console.error('Error getting stock quantities:', e);
+      return [];
+    }
+  };
+
+  // Filter stock quantities to show only those not fully issued (for Stock transaction type)
+  const getAvailableStockQuantities = (itemCode: string): string[] => {
+    try {
+      const allStocks = getStockQuantities(itemCode);
+      return allStocks.filter(stockQty => {
+        const numQty = parseInt(stockQty, 10);
+        
+        // Check in-house issues
+        let totalIssued = 0;
+        const issuesRaw = localStorage.getItem('inHouseIssueData');
+        if (issuesRaw) {
+          const issuesData = JSON.parse(issuesRaw);
+          if (Array.isArray(issuesData)) {
+            issuesData.forEach((issue: any) => {
+              if (Array.isArray(issue.items)) {
+                issue.items.forEach((item: any) => {
+                  if (item.batchNo === stockQty && item.itemCode === itemCode && item.transactionType === 'Stock') {
+                    totalIssued += item.issueQty || 0;
+                  }
+                });
+              }
+            });
+          }
+        }
+        
+        // Check vendor issues (stock issued through vendor)
+        const vendorIssuesRaw = localStorage.getItem('vendorIssueData');
+        if (vendorIssuesRaw) {
+          const vendorIssuesData = JSON.parse(vendorIssuesRaw);
+          if (Array.isArray(vendorIssuesData)) {
+            vendorIssuesData.forEach((issue: any) => {
+              if (Array.isArray(issue.items)) {
+                issue.items.forEach((item: any) => {
+                  // For vendor issues, check if batch matches stock qty and item code
+                  if (issue.batchNo === stockQty && item.itemCode === itemCode) {
+                    totalIssued += item.qty || 0;
+                  }
+                });
+              }
+            });
+          }
+        }
+        
+        const pending = numQty - totalIssued;
+        console.log('[DEBUG] Stock qty filter:', { stockQty, itemCode, pending, willShow: pending > 0 });
+        return pending > 0;
+      });
+    } catch (e) {
+      console.error('Error filtering stock quantities:', e);
+      return getStockQuantities(itemCode);
+    }
+  };
+
+  // Update stock quantities when item code or transaction type changes
+  useEffect(() => {
+    if (itemInput.transactionType === 'Stock' && itemInput.itemCode) {
+      const quantities = getAvailableStockQuantities(itemInput.itemCode);
+      setStockQuantities(quantities);
+    } else {
+      setStockQuantities([]);
+    }
+  }, [itemInput.transactionType, itemInput.itemCode]);
+
+  // Auto-fill Indent No, OA No, PO No from PSIR or VSIR based on batch number
+  useEffect(() => {
+    if (!itemInput.batchNo) {
+      console.log('[InHouse] No batch number selected');
+      return;
+    }
+
+    console.log('[InHouse] Auto-fill triggered with batchNo:', itemInput.batchNo, 'transactionType:', itemInput.transactionType);
+
+    try {
+      if (itemInput.transactionType === 'Purchase') {
+        // Get from PSIR
+        const psirDataRaw = localStorage.getItem('psirData');
+        if (!psirDataRaw) {
+          console.log('[InHouse] No PSIR data found in localStorage');
+          return;
+        }
+        
+        const psirData = JSON.parse(psirDataRaw);
+        console.log('[InHouse] PSIR Data loaded:', psirData);
+        if (!Array.isArray(psirData)) {
+          console.log('[InHouse] PSIR data is not an array');
+          return;
+        }
+        
+        console.log('[InHouse] Searching through', psirData.length, 'PSIR records');
+        for (let i = 0; i < psirData.length; i++) {
+          const psir = psirData[i];
+          console.log(`[InHouse] Record ${i}: batchNo="${psir.batchNo}" (looking for "${itemInput.batchNo}")`);
+          
+          if (psir.batchNo && psir.batchNo.toString().trim() === itemInput.batchNo.toString().trim()) {
+            console.log('[InHouse] ✓ MATCH FOUND!');
+            const indentNo = psir.indentNo || '';
+            const oaNo = psir.oaNo || '';
+            const poNo = psir.poNo || '';
+            console.log('[InHouse] Setting values:', { indentNo, oaNo, poNo });
+            setNewIssue(prev => {
+              const updated = { ...prev, indentNo, oaNo, poNo };
+              console.log('[InHouse] Updated newIssue:', updated);
+              return updated;
+            });
+            return;
+          }
+        }
+        console.log('[InHouse] ✗ No matching PSIR batch found');
+      } else if (itemInput.transactionType === 'Vendor') {
+        // Get from VSIR
+        const vsirDataRaw = localStorage.getItem('vsri-records');
+        if (!vsirDataRaw) {
+          console.log('[InHouse] No VSIR data found in localStorage');
+          return;
+        }
+        
+        const vsirData = JSON.parse(vsirDataRaw);
+        console.log('[InHouse] VSIR Data loaded:', vsirData);
+        if (!Array.isArray(vsirData)) {
+          console.log('[InHouse] VSIR data is not an array');
+          return;
+        }
+        
+        console.log('[InHouse] Searching through', vsirData.length, 'VSIR records');
+        for (let i = 0; i < vsirData.length; i++) {
+          const vsir = vsirData[i];
+          console.log(`[InHouse] Record ${i}: vendorBatchNo="${vsir.vendorBatchNo}" (looking for "${itemInput.batchNo}")`);
+          
+          if (vsir.vendorBatchNo && vsir.vendorBatchNo.toString().trim() === itemInput.batchNo.toString().trim()) {
+            console.log('[InHouse] ✓ MATCH FOUND!');
+            const indentNo = vsir.indentNo || '';
+            const oaNo = vsir.oaNo || '';
+            const poNo = vsir.poNo || '';
+            console.log('[InHouse] Setting values:', { indentNo, oaNo, poNo });
+            setNewIssue(prev => {
+              const updated = { ...prev, indentNo, oaNo, poNo };
+              console.log('[InHouse] Updated newIssue:', updated);
+              return updated;
+            });
+            return;
+          }
+        }
+        console.log('[InHouse] ✗ No matching VSIR batch found');
+      }
+    } catch (e) {
+      console.error('Error auto-filling batch details:', e);
+    }
+  }, [itemInput.batchNo, itemInput.transactionType]);
+
+  // Auto-fill Indent No, OA No, PO No for all saved issues based on their items' batch numbers
+  useEffect(() => {
+    if (issues.length === 0) return;
+
+    try {
+      console.log('[InHouse] Auto-filling batch details for all saved issues');
+      let updated = false;
+      const psirDataRaw = localStorage.getItem('psirData');
+      const vsirDataRaw = localStorage.getItem('vsri-records');
+      
+      const psirData = psirDataRaw ? JSON.parse(psirDataRaw) : [];
+      const vsirData = vsirDataRaw ? JSON.parse(vsirDataRaw) : [];
+
+      const updatedIssues = issues.map(issue => {
+        // If already has all required fields, skip
+        if (issue.indentNo && issue.oaNo && issue.poNo) {
+          return issue;
+        }
+
+        // Try to find matching batch from first item
+        if (issue.items && issue.items.length > 0) {
+          const firstItem = issue.items[0];
+          let indentNo = issue.indentNo || '';
+          let oaNo = issue.oaNo || '';
+          let poNo = issue.poNo || '';
+
+          if (firstItem.transactionType === 'Purchase') {
+            // Search PSIR
+            for (const psir of psirData) {
+              if (psir.batchNo === firstItem.batchNo) {
+                indentNo = psir.indentNo || indentNo;
+                oaNo = psir.oaNo || oaNo;
+                poNo = psir.poNo || poNo;
+                console.log('[InHouse] Found PSIR match for batch:', firstItem.batchNo);
+                updated = true;
+                break;
+              }
+            }
+          } else if (firstItem.transactionType === 'Vendor') {
+            // Search VSIR
+            for (const vsir of vsirData) {
+              if (vsir.vendorBatchNo === firstItem.batchNo) {
+                indentNo = vsir.indentNo || indentNo;
+                oaNo = vsir.oaNo || oaNo;
+                poNo = vsir.poNo || poNo;
+                console.log('[InHouse] Found VSIR match for batch:', firstItem.batchNo);
+                updated = true;
+                break;
+              }
+            }
+          }
+
+          if (updated) {
+            return { ...issue, indentNo, oaNo, poNo };
+          }
+        }
+        return issue;
+      });
+
+      if (updated) {
+        console.log('[InHouse] Updating issues with auto-filled batch details');
+        setIssues(updatedIssues);
+        localStorage.setItem('inHouseIssueData', JSON.stringify(updatedIssues));
+      }
+    } catch (e) {
+      console.error('[InHouse] Error auto-filling batch details for saved issues:', e);
+    }
+  }, []);
 
   // Auto-add an In House Issue for every new PO in purchaseData if not already present, and fill items from purchase module
   useEffect(() => {
@@ -351,6 +615,16 @@ const InHouseIssueModule: React.FC = () => {
     // eslint-disable-next-line
   }, [newIssue.poNo]);
 
+  // Update vendor batch numbers when vendor selection changes
+  useEffect(() => {
+    if (newIssue.vendor) {
+      const batchNosForVendor = getVendorBatchNos(newIssue.vendor);
+      setVendorBatchNos(batchNosForVendor);
+    } else {
+      setVendorBatchNos([]);
+    }
+  }, [newIssue.vendor]);
+
   const handleAddItem = () => {
     if (!itemInput.itemName || !itemInput.itemCode || !itemInput.reqBy || itemInput.issueQty <= 0) return;
     // Sort items by receivedDate (FIFO - oldest first)
@@ -400,7 +674,10 @@ const InHouseIssueModule: React.FC = () => {
   };
 
   const handleAddIssue = () => {
-    if (!newIssue.reqDate || !newIssue.poNo || !newIssue.reqNo || newIssue.items.length === 0) return;
+    if (!newIssue.reqDate || !newIssue.reqNo || newIssue.items.length === 0) {
+      alert('Please fill in: Req. Date, Req. No, and add at least one item');
+      return;
+    }
     const issueNo = getNextIssueNo(issues);
     const updated = [...issues, { ...newIssue, issueNo }];
     setIssues(updated);
@@ -421,12 +698,199 @@ const InHouseIssueModule: React.FC = () => {
     }
   };
 
+  // Get batch details (OK Qty and Reject Qty) based on selected batch
+  // Calculate already issued qty for a batch number
+  const getIssuedQtyForBatch = (batchNo: string, transactionType: string, itemCode: string): number => {
+    try {
+      let totalIssued = 0;
+      
+      // Check in-house issue data
+      const issuesRaw = localStorage.getItem('inHouseIssueData');
+      if (issuesRaw) {
+        const issuesData = JSON.parse(issuesRaw);
+        if (Array.isArray(issuesData)) {
+          issuesData.forEach((issue: any) => {
+            if (Array.isArray(issue.items)) {
+              issue.items.forEach((item: any) => {
+                // Sum ALL issued quantities for this batch and itemCode
+                if (item.batchNo === batchNo && item.itemCode === itemCode) {
+                  totalIssued += item.issueQty || 0;
+                }
+              });
+            }
+          });
+        }
+      }
+      
+      // Also check vendor issue data - items issued through Vendor Issues module
+      const vendorIssuesRaw = localStorage.getItem('vendorIssueData');
+      if (vendorIssuesRaw) {
+        const vendorIssuesData = JSON.parse(vendorIssuesRaw);
+        console.log('[DEBUG] Vendor Issues Data (Full):', vendorIssuesData);
+        if (Array.isArray(vendorIssuesData)) {
+          vendorIssuesData.forEach((issue: any, issueIdx: number) => {
+            console.log(`[DEBUG] Processing vendor issue ${issueIdx}:`, { 
+              issueBatchNo: issue.batchNo,
+              items: issue.items 
+            });
+            if (Array.isArray(issue.items)) {
+              issue.items.forEach((item: any, itemIdx: number) => {
+                console.log(`[DEBUG] Processing vendor item ${issueIdx}-${itemIdx}:`, { 
+                  fullItem: item,
+                  issueBatchNo: issue.batchNo,
+                  searchBatchNo: batchNo, 
+                  batchMatch: issue.batchNo === batchNo,
+                  itemCode: item.itemCode,
+                  searchItemCode: itemCode,
+                  codeMatch: item.itemCode === itemCode,
+                  qty: item.qty
+                });
+                // Match by ISSUE batch number (not item.batchNo) and item code
+                if (issue.batchNo === batchNo && item.itemCode === itemCode) {
+                  console.log('[DEBUG] ✓✓✓ Found vendor issued item:', { batchNo, itemCode, qty: item.qty });
+                  totalIssued += item.qty || 0;
+                }
+              });
+            } else {
+              console.log(`[DEBUG] Vendor issue ${issueIdx} has no items array or items is not array`);
+            }
+          });
+        }
+      }
+      
+      console.log('[DEBUG] getIssuedQtyForBatch result:', { batchNo, itemCode, totalIssued });
+      return totalIssued;
+    } catch (e) {
+      console.error('Error calculating issued qty for batch:', e);
+      return 0;
+    }
+  };
+
+  // Get OK Qty for a batch from PSIR
+  const getPsirOkQtyForBatch = (batchNo: string, itemCode: string): number => {
+    try {
+      const psirDataRaw = localStorage.getItem('psirData');
+      if (!psirDataRaw) return 0;
+      
+      const psirData = JSON.parse(psirDataRaw);
+      if (!Array.isArray(psirData)) return 0;
+      
+      for (const psir of psirData) {
+        if (psir.batchNo === batchNo && Array.isArray(psir.items)) {
+          const item = psir.items.find((it: any) => it.itemCode === itemCode);
+          if (item) {
+            return item.okQty || 0;
+          }
+        }
+      }
+      return 0;
+    } catch (e) {
+      console.error('Error getting PSIR OK Qty:', e);
+      return 0;
+    }
+  };
+
+  // Get OK Qty for a batch from VSIR
+  const getVsirOkQtyForBatch = (batchNo: string, itemCode: string): number => {
+    try {
+      const vsirDataRaw = localStorage.getItem('vsri-records');
+      if (!vsirDataRaw) return 0;
+      
+      const vsirData = JSON.parse(vsirDataRaw);
+      if (!Array.isArray(vsirData)) return 0;
+      
+      for (const vsir of vsirData) {
+        if (vsir.vendorBatchNo === batchNo && vsir.itemCode === itemCode) {
+          return vsir.okQty || 0;
+        }
+      }
+      return 0;
+    } catch (e) {
+      console.error('Error getting VSIR OK Qty:', e);
+      return 0;
+    }
+  };
+
+  // Get pending OK Qty for a batch (OK Qty - Already Issued)
+  const getPendingOkQtyForBatch = (batchNo: string, transactionType: string, itemCode: string): number => {
+    let totalOkQty = 0;
+    
+    if (transactionType === 'Purchase') {
+      totalOkQty = getPsirOkQtyForBatch(batchNo, itemCode);
+    } else if (transactionType === 'Vendor') {
+      totalOkQty = getVsirOkQtyForBatch(batchNo, itemCode);
+    }
+    
+    const issuedQty = getIssuedQtyForBatch(batchNo, transactionType, itemCode);
+    const pending = Math.max(0, totalOkQty - issuedQty);
+    
+    console.log('[DEBUG] getPendingOkQtyForBatch:', { batchNo, transactionType, itemCode, totalOkQty, issuedQty, pending });
+    return pending;
+  };
+
+  // Filter batch numbers to show only those with pending OK Qty
+  const getPsirBatchNosWithPending = (itemCode: string): string[] => {
+    const allBatches = getPsirBatchNosForItem(itemCode);
+    return allBatches.filter(batch => {
+      const pendingQty = getPendingOkQtyForBatch(batch, 'Purchase', itemCode);
+      return pendingQty > 0;
+    });
+  };
+
+  // Filter batch numbers to show only those with pending OK Qty
+  const getVsirBatchNosWithPending = (itemCode: string): string[] => {
+    const allBatches = getVsirBatchNosForItem(itemCode);
+    return allBatches.filter(batch => {
+      const pendingQty = getPendingOkQtyForBatch(batch, 'Vendor', itemCode);
+      return pendingQty > 0;
+    });
+  };
+
+  // Get batch details (OK Qty and Reject Qty) based on selected batch
+  const getBatchDetailsText = (): string => {
+    if (!itemInput.batchNo) {
+      return '';
+    }
+
+    try {
+      if (itemInput.transactionType === 'Purchase') {
+        const totalOkQty = getPsirOkQtyForBatch(itemInput.batchNo, itemInput.itemCode);
+        const pendingOkQty = getPendingOkQtyForBatch(itemInput.batchNo, 'Purchase', itemInput.itemCode);
+        return `${itemInput.batchNo} | OK: ${totalOkQty} | Pending: ${pendingOkQty}`;
+      } else if (itemInput.transactionType === 'Vendor') {
+        const totalOkQty = getVsirOkQtyForBatch(itemInput.batchNo, itemInput.itemCode);
+        const pendingOkQty = getPendingOkQtyForBatch(itemInput.batchNo, 'Vendor', itemInput.itemCode);
+        return `${itemInput.batchNo} | OK: ${totalOkQty} | Pending: ${pendingOkQty}`;
+      } else if (itemInput.transactionType === 'Stock') {
+        // Get from Stock Module
+        const stockDataRaw = localStorage.getItem('stock-records');
+        if (!stockDataRaw) return 'No Stock data';
+        
+        const stockData = JSON.parse(stockDataRaw);
+        if (!Array.isArray(stockData)) return 'Invalid Stock data';
+        
+        for (const stock of stockData) {
+          if (stock.itemCode === itemInput.itemCode && stock.closingStock.toString() === itemInput.batchNo) {
+            const qty = stock.closingStock || 0;
+            return `Stock Qty: ${qty}`;
+          }
+        }
+        return `No stock details found`;
+      }
+      return '';
+    } catch (e) {
+      console.error('Error getting batch details:', e);
+      return 'Error fetching details';
+    }
+  };
+
   return (
     <div>
       <h2>In House Issue Module</h2>
       <div style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input type="text" placeholder="Req. No" value={newIssue.reqNo} readOnly style={{ fontWeight: 'bold', background: '#f0f0f0' }} />
         <input type="date" placeholder="Req. Date" value={newIssue.reqDate} onChange={e => setNewIssue({ ...newIssue, reqDate: e.target.value })} />
+        <input type="text" placeholder="Indent No" value={newIssue.indentNo} onChange={e => setNewIssue({ ...newIssue, indentNo: e.target.value })} style={{ display: 'none' }} />
         <input type="text" placeholder="OA No" value={newIssue.oaNo} onChange={e => setNewIssue({ ...newIssue, oaNo: e.target.value })} style={{ display: 'none' }} />
         <input placeholder="PO No" value={newIssue.poNo} onChange={e => setNewIssue({ ...newIssue, poNo: e.target.value })} style={{ display: 'none' }} />
         <input type="text" placeholder="Purchase Batch No" value={newIssue.purchaseBatchNo} onChange={e => setNewIssue({ ...newIssue, purchaseBatchNo: e.target.value })} style={{ display: 'none' }} />
@@ -464,19 +928,37 @@ const InHouseIssueModule: React.FC = () => {
           <option value="">Select</option>
           {itemInput.transactionType === 'Purchase' ? (
             psirBatchNos && psirBatchNos.length > 0 ? (
-              psirBatchNos.map(batchNo => (
-                <option key={batchNo} value={batchNo}>{batchNo}</option>
-              ))
+              getPsirBatchNosWithPending(itemInput.itemCode).map(batchNo => {
+                const pendingQty = getPendingOkQtyForBatch(batchNo, 'Purchase', itemInput.itemCode);
+                return (
+                  <option key={batchNo} value={batchNo}>
+                    {batchNo} (Pending: {pendingQty})
+                  </option>
+                );
+              })
             ) : (
               <option disabled style={{ color: '#999' }}>No batch numbers available</option>
             )
           ) : itemInput.transactionType === 'Vendor' ? (
             vsirBatchNos && vsirBatchNos.length > 0 ? (
-              vsirBatchNos.map(batchNo => (
-                <option key={batchNo} value={batchNo}>{batchNo}</option>
-              ))
+              getVsirBatchNosWithPending(itemInput.itemCode).map(batchNo => {
+                const pendingQty = getPendingOkQtyForBatch(batchNo, 'Vendor', itemInput.itemCode);
+                return (
+                  <option key={batchNo} value={batchNo}>
+                    {batchNo} (Pending: {pendingQty})
+                  </option>
+                );
+              })
             ) : (
               <option disabled style={{ color: '#999' }}>No vendor batch numbers available</option>
+            )
+          ) : itemInput.transactionType === 'Stock' ? (
+            stockQuantities && stockQuantities.length > 0 ? (
+              stockQuantities.map(qty => (
+                <option key={qty} value={qty}>Stock Quantity: {qty}</option>
+              ))
+            ) : (
+              <option disabled style={{ color: '#999' }}>No stock quantities available</option>
             )
           ) : (
             <option disabled style={{ color: '#999' }}>Select Transaction Type first</option>
@@ -489,6 +971,24 @@ const InHouseIssueModule: React.FC = () => {
         <input type="number" placeholder="In Stock" value={itemInput.inStock || ''} onChange={e => setItemInput({ ...itemInput, inStock: Number(e.target.value) })} style={{ display: 'none' }} />
         <input type="date" placeholder="Received Date (FIFO)" value={itemInput.receivedDate || ''} onChange={e => setItemInput({ ...itemInput, receivedDate: e.target.value })} title="Date when item was received - used for FIFO" style={{ display: 'none' }} />
         <input type="number" placeholder="Issue Qty" value={itemInput.issueQty || ''} onChange={e => setItemInput({ ...itemInput, issueQty: Number(e.target.value) })} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <label style={{ fontWeight: 'bold', minWidth: '80px' }}>Batch Details:</label>
+          <input
+            type="text"
+            placeholder="Batch No | OK Qty"
+            value={getBatchDetailsText()}
+            readOnly
+            style={{
+              background: '#f5f5f5',
+              padding: '8px 12px',
+              borderRadius: 4,
+              border: '1px solid #ddd',
+              minWidth: '250px',
+              fontFamily: 'monospace',
+              fontSize: '12px'
+            }}
+          />
+        </div>
         <label style={{ display: 'none' }}>
           <input type="checkbox" checked={itemInput.reqClosed} onChange={e => setItemInput({ ...itemInput, reqClosed: e.target.checked })} />
           Req Closed
@@ -540,11 +1040,9 @@ const InHouseIssueModule: React.FC = () => {
           <tr>
             <th>Req. No</th>
             <th>Req. Date</th>
+            <th>Indent No</th>
             <th>OA No</th>
             <th>PO No</th>
-            <th>Vendor</th>
-            <th>Purchase Batch No</th>
-            <th>Vendor Batch No</th>
             <th>Issue No</th>
             <th>Item Name</th>
             <th>Item Code</th>
@@ -565,11 +1063,9 @@ const InHouseIssueModule: React.FC = () => {
               <tr key={`${idx}-${i}`}>
                 <td>{issue.reqNo}</td>
                 <td>{issue.reqDate}</td>
+                <td>{issue.indentNo}</td>
                 <td>{issue.oaNo}</td>
                 <td>{issue.poNo}</td>
-                <td>{issue.vendor}</td>
-                <td>{issue.purchaseBatchNo}</td>
-                <td>{issue.vendorBatchNo}</td>
                 <td>{issue.issueNo}</td>
                 <td>{item.itemName}</td>
                 <td>{item.itemCode}</td>
@@ -596,6 +1092,237 @@ const InHouseIssueModule: React.FC = () => {
          )}
         </tbody>
       </table>
+
+      {/* DEBUG PANEL */}
+      <div style={{ marginTop: 40, borderTop: '2px solid #ddd', paddingTop: 20 }}>
+        <button 
+          onClick={() => setDebugPanelOpen(!debugPanelOpen)}
+          style={{ 
+            background: '#ff9800', 
+            color: 'white', 
+            padding: '10px 20px', 
+            border: 'none', 
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontSize: 14,
+            fontWeight: 'bold'
+          }}
+        >
+          {debugPanelOpen ? '🐛 Hide DEBUG PANEL' : '🐛 Show DEBUG PANEL'}
+        </button>
+
+        {debugPanelOpen && (
+          <div style={{ 
+            marginTop: 20, 
+            background: '#f5f5f5', 
+            border: '2px solid #ff9800',
+            padding: 20,
+            borderRadius: 8,
+            fontSize: 12
+          }}>
+            <h3 style={{ marginTop: 0, color: '#ff6f00' }}>🔧 Debug Panel - Batch Filtering Logic</h3>
+            
+            <div style={{ marginBottom: 20 }}>
+              <strong>📋 Current Selection:</strong>
+              <div style={{ background: 'white', padding: 10, marginTop: 5, borderRadius: 4, fontFamily: 'monospace' }}>
+                <div>Item Name: <strong>{itemInput.itemName || 'N/A'}</strong></div>
+                <div>Item Code: <strong>{itemInput.itemCode || 'N/A'}</strong></div>
+                <div>Transaction Type: <strong>{itemInput.transactionType || 'N/A'}</strong></div>
+                <div>Selected Batch: <strong>{itemInput.batchNo || 'N/A'}</strong></div>
+              </div>
+            </div>
+
+            {itemInput.transactionType === 'Purchase' && (
+              <div style={{ marginBottom: 20 }}>
+                <strong>🏭 PURCHASE Transaction Type - Batch Analysis:</strong>
+                <div style={{ background: 'white', padding: 10, marginTop: 5, borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
+                  <div style={{ marginBottom: 10 }}>
+                    <strong>All PSIR Batches Available:</strong>
+                    <div style={{ paddingLeft: 10 }}>
+                      {psirBatchNos.length > 0 ? (
+                        psirBatchNos.map((batch) => {
+                          const okQty = getPsirOkQtyForBatch(batch, itemInput.itemCode);
+                          const issuedQty = getIssuedQtyForBatch(batch, 'Purchase', itemInput.itemCode);
+                          const pendingQty = getPendingOkQtyForBatch(batch, 'Purchase', itemInput.itemCode);
+                          const willShow = pendingQty > 0;
+                          
+                          return (
+                            <div key={batch} style={{ 
+                              padding: 8, 
+                              margin: 5, 
+                              background: willShow ? '#e8f5e9' : '#ffebee',
+                              borderLeft: `3px solid ${willShow ? '#4caf50' : '#f44336'}`,
+                              borderRadius: 3
+                            }}>
+                              <div><strong>{batch}</strong> {willShow ? '✅' : '❌'}</div>
+                              <div>  OK Qty: {okQty} | Issued: {issuedQty} | Pending: {pendingQty}</div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div style={{ color: '#999' }}>No PSIR batches found</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 15, paddingTop: 10, borderTop: '1px solid #ddd' }}>
+                    <strong>Dropdown will show:</strong>
+                    <div style={{ paddingLeft: 10, color: '#2196f3' }}>
+                      {getPsirBatchNosWithPending(itemInput.itemCode).length > 0 ? (
+                        getPsirBatchNosWithPending(itemInput.itemCode).map(b => (
+                          <div key={b}>✓ {b} (Pending: {getPendingOkQtyForBatch(b, 'Purchase', itemInput.itemCode)})</div>
+                        ))
+                      ) : (
+                        <div style={{ color: '#f44336' }}>❌ No batches (all fully issued)</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {itemInput.transactionType === 'Vendor' && (
+              <div style={{ marginBottom: 20 }}>
+                <strong>🏪 VENDOR Transaction Type - Batch Analysis:</strong>
+                <div style={{ background: 'white', padding: 10, marginTop: 5, borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
+                  <div style={{ marginBottom: 10 }}>
+                    <strong>All VSIR Batches Available:</strong>
+                    <div style={{ paddingLeft: 10 }}>
+                      {vsirBatchNos.length > 0 ? (
+                        vsirBatchNos.map((batch) => {
+                          const okQty = getVsirOkQtyForBatch(batch, itemInput.itemCode);
+                          const issuedQty = getIssuedQtyForBatch(batch, 'Vendor', itemInput.itemCode);
+                          const pendingQty = getPendingOkQtyForBatch(batch, 'Vendor', itemInput.itemCode);
+                          const willShow = pendingQty > 0;
+                          
+                          return (
+                            <div key={batch} style={{ 
+                              padding: 8, 
+                              margin: 5, 
+                              background: willShow ? '#e8f5e9' : '#ffebee',
+                              borderLeft: `3px solid ${willShow ? '#4caf50' : '#f44336'}`,
+                              borderRadius: 3
+                            }}>
+                              <div><strong>{batch}</strong> {willShow ? '✅' : '❌'}</div>
+                              <div>  OK Qty: {okQty} | Issued: {issuedQty} | Pending: {pendingQty}</div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div style={{ color: '#999' }}>No VSIR batches found</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 15, paddingTop: 10, borderTop: '1px solid #ddd' }}>
+                    <strong>Dropdown will show:</strong>
+                    <div style={{ paddingLeft: 10, color: '#2196f3' }}>
+                      {getVsirBatchNosWithPending(itemInput.itemCode).length > 0 ? (
+                        getVsirBatchNosWithPending(itemInput.itemCode).map(b => (
+                          <div key={b}>✓ {b} (Pending: {getPendingOkQtyForBatch(b, 'Vendor', itemInput.itemCode)})</div>
+                        ))
+                      ) : (
+                        <div style={{ color: '#f44336' }}>❌ No batches (all fully issued)</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {itemInput.transactionType === 'Stock' && (
+              <div style={{ marginBottom: 20 }}>
+                <strong>📦 STOCK Transaction Type - Quantity Analysis:</strong>
+                <div style={{ background: 'white', padding: 10, marginTop: 5, borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
+                  <div style={{ marginBottom: 10 }}>
+                    <strong>All Stock Quantities Available:</strong>
+                    <div style={{ paddingLeft: 10 }}>
+                      {stockQuantities.length > 0 ? (
+                        getStockQuantities(itemInput.itemCode).map((qty) => {
+                          let totalIssued = 0;
+                          
+                          // Check in-house issues
+                          const issuesRaw = localStorage.getItem('inHouseIssueData');
+                          if (issuesRaw) {
+                            const issuesData = JSON.parse(issuesRaw);
+                            if (Array.isArray(issuesData)) {
+                              issuesData.forEach((issue: any) => {
+                                if (Array.isArray(issue.items)) {
+                                  issue.items.forEach((item: any) => {
+                                    if (item.batchNo === qty && item.itemCode === itemInput.itemCode && item.transactionType === 'Stock') {
+                                      totalIssued += item.issueQty || 0;
+                                    }
+                                  });
+                                }
+                              });
+                            }
+                          }
+                          
+                          // Check vendor issues
+                          const vendorIssuesRaw = localStorage.getItem('vendorIssueData');
+                          if (vendorIssuesRaw) {
+                            const vendorIssuesData = JSON.parse(vendorIssuesRaw);
+                            if (Array.isArray(vendorIssuesData)) {
+                              vendorIssuesData.forEach((issue: any) => {
+                                if (Array.isArray(issue.items)) {
+                                  issue.items.forEach((item: any) => {
+                                    if (issue.batchNo === qty && item.itemCode === itemInput.itemCode) {
+                                      totalIssued += item.qty || 0;
+                                    }
+                                  });
+                                }
+                              });
+                            }
+                          }
+                          
+                          const numQty = parseInt(qty, 10);
+                          const pending = numQty - totalIssued;
+                          const willShow = pending > 0;
+                          
+                          return (
+                            <div key={qty} style={{ 
+                              padding: 8, 
+                              margin: 5, 
+                              background: willShow ? '#e8f5e9' : '#ffebee',
+                              borderLeft: `3px solid ${willShow ? '#4caf50' : '#f44336'}`,
+                              borderRadius: 3
+                            }}>
+                              <div><strong>Qty: {qty}</strong> {willShow ? '✅' : '❌'}</div>
+                              <div>  In-House Issued: {totalIssued} | Pending: {pending}</div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div style={{ color: '#999' }}>No stock quantities found</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 15, paddingTop: 10, borderTop: '1px solid #ddd' }}>
+                    <strong>Dropdown will show:</strong>
+                    <div style={{ paddingLeft: 10, color: '#2196f3' }}>
+                      {getAvailableStockQuantities(itemInput.itemCode).length > 0 ? (
+                        getAvailableStockQuantities(itemInput.itemCode).map(qty => (
+                          <div key={qty}>✓ Stock Qty: {qty}</div>
+                        ))
+                      ) : (
+                        <div style={{ color: '#f44336' }}>❌ No stock quantities (all fully issued)</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ marginTop: 20, paddingTop: 10, borderTop: '1px solid #ccc', fontSize: 11, color: '#666' }}>
+              <strong>📝 Formula:</strong>
+              <div>Pending Qty = Available Qty - (In-House Issued + Vendor Issued)</div>
+              <div>✅ Show in dropdown if: Pending Qty &gt; 0</div>
+              <div>❌ Hide from dropdown if: Pending Qty = 0 (already fully issued)</div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

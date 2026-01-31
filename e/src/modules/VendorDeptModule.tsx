@@ -193,6 +193,43 @@ const getIndentStatusFromPurchase = (poNo: any, itemCode: any, indentNo: any): s
 	}
 };
 
+// Helper: Get supplier name from Purchase module by PO No
+const getSupplierNameFromPO = (poNo: any): string => {
+	try {
+		if (!poNo) return '';
+		const poNoNormalized = String(poNo).trim().toUpperCase();
+		
+		// Check Purchase Orders first
+		const purchaseOrdersRaw = localStorage.getItem('purchaseOrders');
+		if (purchaseOrdersRaw) {
+			const purchaseOrders = JSON.parse(purchaseOrdersRaw);
+			if (Array.isArray(purchaseOrders)) {
+				const po = purchaseOrders.find((p: any) => String(p.poNo || '').trim().toUpperCase() === poNoNormalized);
+				if (po && po.supplierName) {
+					return String(po.supplierName).trim();
+				}
+			}
+		}
+		
+		// Fall back to Purchase Data
+		const purchaseDataRaw = localStorage.getItem('purchaseData');
+		if (purchaseDataRaw) {
+			const purchaseData = JSON.parse(purchaseDataRaw);
+			if (Array.isArray(purchaseData)) {
+				const entry = purchaseData.find((p: any) => String(p.poNo || '').trim().toUpperCase() === poNoNormalized);
+				if (entry && entry.supplierName) {
+					return String(entry.supplierName).trim();
+				}
+			}
+		}
+		
+		return '';
+	} catch (err) {
+		console.error('[VendorDept] Error getting supplier name:', err);
+		return '';
+	}
+};
+
 // Helper: Get vendorBatchNo from VSIR module if available
 const getVendorBatchNoFromVSIR = (poNo: any): string => {
 	try {
@@ -239,6 +276,22 @@ const getVendorBatchNoFromVSIR = (poNo: any): string => {
 	} catch (err) {
 		console.log('[VendorDept] Error getting vendorBatchNo from VSIR:', err);
 		return '';
+	}
+};
+
+// Helper: Get PSIR data for a given PO
+const getPSIRDataByPO = (poNo: string | undefined): any => {
+	try {
+		if (!poNo) return null;
+		const psirRaw = localStorage.getItem('psirData');
+		if (!psirRaw) return null;
+		const psirRecords = JSON.parse(psirRaw);
+		if (!Array.isArray(psirRecords)) return null;
+		const match = psirRecords.find((r: any) => String(r.poNo || '').trim() === String(poNo).trim());
+		return match || null;
+	} catch (err) {
+		console.error('[VendorDept] Error getting PSIR data:', err);
+		return null;
 	}
 };
 
@@ -419,6 +472,40 @@ const VendorDeptModule: React.FC = () => {
 			console.error('[VendorDeptModule][AutoFill] Error reading VSIR data:', e);
 		}
 	}, [newOrder.materialPurchasePoNo, itemInput.itemCode]);
+
+	// Auto-populate items from PSIR when PO changes (only if items list is empty)
+	useEffect(() => {
+		if (!newOrder.materialPurchasePoNo || newOrder.items.length > 0) return;
+		
+		try {
+			const psirData = getPSIRDataByPO(newOrder.materialPurchasePoNo);
+			if (psirData && psirData.items && Array.isArray(psirData.items)) {
+				console.log('[VendorDeptModule][AutoPopulate] Found', psirData.items.length, 'items in PSIR for PO:', newOrder.materialPurchasePoNo);
+				
+				// Auto-populate items from PSIR
+				const psirItems = psirData.items.map((item: any) => ({
+					itemName: item.itemName || '',
+					itemCode: item.itemCode || '',
+					materialIssueNo: '', // Will be filled by user
+					qty: item.qtyReceived || item.poQty || 0,
+					closingStock: getClosingStock(item.itemCode, item.itemName),
+					indentStatus: '',
+					receivedQty: 0,
+					okQty: 0,
+					reworkQty: 0,
+					rejectedQty: 0,
+					grnNo: item.grnNo || '',
+					debitNoteOrQtyReturned: '',
+					remarks: '',
+				}));
+				
+				setNewOrder(prev => ({ ...prev, items: psirItems }));
+				console.log('[VendorDeptModule][AutoPopulate] Populated items from PSIR');
+			}
+		} catch (e) {
+			console.error('[VendorDeptModule][AutoPopulate] Error:', e);
+		}
+	}, [newOrder.materialPurchasePoNo]);
 
 	// Sync quantities from VSIR to existing orders
 	useEffect(() => {
@@ -775,6 +862,7 @@ useEffect(() => {
 			let oaNoValue = '';
 			let batchNoValue = '';
 			let vendorBatchNoValue = '';
+			let orderPlaceDateValue = '';
 			
 			// FIRST: Try to get from existing VendorDept orders
 			const existingOrder = orders.find(order => order.materialPurchasePoNo === poNo);
@@ -782,38 +870,18 @@ useEffect(() => {
 				oaNoValue = existingOrder.oaNo || '';
 				batchNoValue = existingOrder.batchNo || '';
 				vendorBatchNoValue = existingOrder.vendorBatchNo || '';
-				console.log('[VendorDeptModule][MaterialPOChange] ✓ Found in existing VendorDept orders:', { oaNoValue, batchNoValue, vendorBatchNoValue });
+				orderPlaceDateValue = existingOrder.orderPlaceDate || '';
+				console.log('[VendorDeptModule][MaterialPOChange] ✓ Found in existing VendorDept orders:', { oaNoValue, batchNoValue, vendorBatchNoValue, orderPlaceDateValue });
 			}
 			
 			// SECOND: If not found in orders, try PSIR data
-			if (!oaNoValue || !batchNoValue) {
-				const psirDataRaw = localStorage.getItem('psirData');
-				if (psirDataRaw) {
-					try {
-						const psirs = JSON.parse(psirDataRaw);
-						console.log('[VendorDeptModule][MaterialPOChange] Checking PSIR records count:', Array.isArray(psirs) ? psirs.length : 0);
-						
-						if (Array.isArray(psirs)) {
-							const matchingPSIR = psirs.find((p: any) => p.poNo === poNo);
-							console.log('[VendorDeptModule][MaterialPOChange] Matching PSIR:', matchingPSIR);
-							
-							if (matchingPSIR) {
-								if (!oaNoValue) oaNoValue = matchingPSIR.oaNo || '';
-								
-								// ONLY set batchNo if invoiceNo is entered in PSIR
-								if (!batchNoValue && matchingPSIR.invoiceNo && String(matchingPSIR.invoiceNo).trim()) {
-									batchNoValue = matchingPSIR.batchNo || '';
-									console.log('[VendorDeptModule][MaterialPOChange] ✓ Invoice No found in PSIR, using Batch No:', batchNoValue);
-								} else if (!matchingPSIR.invoiceNo || !String(matchingPSIR.invoiceNo).trim()) {
-									console.log('[VendorDeptModule][MaterialPOChange] ✗ Invoice No NOT found in PSIR, skipping Batch No');
-								}
-								
-								console.log('[VendorDeptModule][MaterialPOChange] Extracted from PSIR - OA NO:', oaNoValue, 'Batch No:', batchNoValue, 'Invoice No:', matchingPSIR.invoiceNo);
-							}
-						}
-					} catch (e) {
-						console.error('[VendorDeptModule][MaterialPOChange] Error reading PSIR:', e);
-					}
+			if (!oaNoValue || !batchNoValue || !orderPlaceDateValue) {
+				const psirData = getPSIRDataByPO(poNo);
+				if (psirData) {
+					if (!oaNoValue) oaNoValue = psirData.oaNo || '';
+					if (!batchNoValue) batchNoValue = psirData.batchNo || '';
+					if (!orderPlaceDateValue) orderPlaceDateValue = psirData.receivedDate || '';
+					console.log('[VendorDeptModule][MaterialPOChange] ✓ Found in PSIR:', { oaNoValue, batchNoValue, orderPlaceDateValue });
 				}
 			}
 			
@@ -827,18 +895,17 @@ useEffect(() => {
 				}
 			}
 			
-			console.log('[VendorDeptModule][MaterialPOChange] Final values - OA NO:', oaNoValue, 'Batch No:', batchNoValue, 'Vendor Batch No:', vendorBatchNoValue);
+			console.log('[VendorDeptModule][MaterialPOChange] Final values - Order Place Date:', orderPlaceDateValue, 'OA NO:', oaNoValue, 'Batch No:', batchNoValue);
 			
 			setNewOrder(prev => {
 				const updated = {
 					...prev,
+					orderPlaceDate: orderPlaceDateValue || prev.orderPlaceDate,
 					oaNo: oaNoValue || prev.oaNo,
 					batchNo: batchNoValue || prev.batchNo,
 					vendorBatchNo: vendorBatchNoValue || prev.vendorBatchNo,
 				};
 				console.log('[VendorDeptModule][MaterialPOChange] Updated newOrder state:', updated);
-				console.log('[VendorDeptModule][MaterialPOChange] batchNo explicitly set to:', batchNoValue);
-				console.log('[VendorDeptModule][MaterialPOChange] vendorBatchNo explicitly set to:', vendorBatchNoValue);
 				return updated;
 			});
 		} catch (e) {
@@ -952,6 +1019,16 @@ useEffect(() => {
 		const itemWithStock = { ...itemInput, closingStock: getClosingStock(itemInput.itemCode, itemInput.itemName) };
 		setNewOrder({ ...newOrder, items: [...newOrder.items, itemWithStock] });
 		setItemInput({ itemName: '', itemCode: '', materialIssueNo: '', qty: 0, closingStock: '', indentStatus: '', receivedQty: 0, okQty: 0, reworkQty: 0, rejectedQty: 0, grnNo: '', debitNoteOrQtyReturned: '', remarks: '' });
+	};
+
+	const [editItemIdx, setEditItemIdx] = useState<number | null>(null);
+
+	const handleDeleteCurrentItem = (idx: number) => {
+		setNewOrder(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
+		if (editItemIdx === idx) {
+			setEditItemIdx(null);
+			setItemInput({ itemName: '', itemCode: '', materialIssueNo: '', qty: 0, closingStock: '', indentStatus: '', receivedQty: 0, okQty: 0, reworkQty: 0, rejectedQty: 0, grnNo: '', debitNoteOrQtyReturned: '', remarks: '' });
+		}
 	};
 
 	const handleAddOrder = () => {
@@ -1072,6 +1149,25 @@ useEffect(() => {
 
 	const [editOrderIdx, setEditOrderIdx] = useState<number | null>(null);
 
+	// Auto-fill Vendor Name from Purchase module when PO No changes
+	useEffect(() => {
+		if (!newOrder.materialPurchasePoNo) {
+			// If PO is cleared, don't clear vendor name (user might want to keep it)
+			return;
+		}
+		
+		// Only auto-fill if vendor name is empty AND we're not editing (fresh add)
+		if (editOrderIdx === null && !newOrder.vendorName) {
+			const supplierName = getSupplierNameFromPO(newOrder.materialPurchasePoNo);
+			if (supplierName) {
+				console.log('[VendorDeptModule][VendorAutoFill] ✓ Fetched supplier name from PO:', supplierName);
+				setNewOrder(prev => ({ ...prev, vendorName: supplierName }));
+			} else {
+				console.log('[VendorDeptModule][VendorAutoFill] ✗ Could not find supplier name for PO:', newOrder.materialPurchasePoNo);
+			}
+		}
+	}, [newOrder.materialPurchasePoNo, editOrderIdx, newOrder.vendorName]);
+
 	const handleEditOrder = (idx: number) => {
 		// Deep clone to avoid direct mutation
 		const orderToEdit = JSON.parse(JSON.stringify(orders[idx]));
@@ -1108,8 +1204,23 @@ useEffect(() => {
 			items: newOrder.items,
 		};
 		console.log('[DEBUG][VendorDeptModule] Order to save with batchNo:', orderToSave);
+		
+		// CRITICAL: Reload from localStorage to ensure we're updating the correct record
+		let updated = orders;
+		try {
+			const savedData = localStorage.getItem('vendorDeptData');
+			if (savedData) {
+				updated = JSON.parse(savedData);
+				console.log('[DEBUG][VendorDeptModule] Reloaded from localStorage, array length:', updated.length);
+			}
+		} catch (err) {
+			console.error('[DEBUG][VendorDeptModule] Error reloading from localStorage:', err);
+			// Fall back to current orders state if localStorage fails
+			updated = orders;
+		}
+		
 		// Save the edited order at the correct index
-		const updated = orders.map((order, idx) => idx === editOrderIdx ? orderToSave : order);
+		updated = updated.map((order: any, idx: number) => idx === editOrderIdx ? orderToSave : order);
 		console.log('[DEBUG][VendorDeptModule] Updated orders array after save:', updated);
 		setOrders(updated);
 		localStorage.setItem('vendorDeptData', JSON.stringify(updated));
@@ -1194,27 +1305,47 @@ useEffect(() => {
 			console.error('[VendorDeptModule][AutoImport] Error parsing purchaseOrders:', err);
 		}
 		
-		// Group purchase entries by poNo
+		// Group purchase entries by poNo (normalized to uppercase for consistent comparison)
 		const poGroups: { [poNo: string]: any[] } = {};
 		purchaseEntries.forEach((entry: any) => {
 			if (!entry.poNo) return;
-			if (!poGroups[entry.poNo]) poGroups[entry.poNo] = [];
-			poGroups[entry.poNo].push(entry);
+			const normalizedPoNo = String(entry.poNo).trim().toUpperCase();
+			if (!poGroups[normalizedPoNo]) poGroups[normalizedPoNo] = [];
+			poGroups[normalizedPoNo].push(entry);
 		});
 		
 		console.debug('[VendorDeptModule][AutoImport] poGroups:', poGroups);
 		
 		// For each PO, check if an order exists in Vendor Dept Orders
-		const existingPOs = new Set(orders.map(order => order.materialPurchasePoNo));
-		console.debug('[VendorDeptModule][AutoImport] existingPOs:', existingPOs);
+		// CRITICAL: Check both in-memory state AND localStorage to prevent duplicates
+		// ALSO: Normalize PO numbers to uppercase for case-insensitive comparison
+		const existingPOs = new Set<string>(orders.map(order => String(order.materialPurchasePoNo).trim().toUpperCase()));
+		try {
+			const savedData = localStorage.getItem('vendorDeptData');
+			if (savedData) {
+				const savedOrders = JSON.parse(savedData);
+				if (Array.isArray(savedOrders)) {
+					savedOrders.forEach((order: any) => {
+						if (order.materialPurchasePoNo) {
+							const normalizedPoNo = String(order.materialPurchasePoNo).trim().toUpperCase();
+							existingPOs.add(normalizedPoNo);
+						}
+					});
+				}
+			}
+		} catch (err) {
+			console.error('[VendorDeptModule][AutoImport] Error reading vendorDeptData from localStorage:', err);
+		}
+		console.debug('[VendorDeptModule][AutoImport] existingPOs (normalized):', existingPOs);
 		
 		let added = false;
 		const newOrders = [...orders];
 		
 		purchasePOs.forEach(poNo => {
-			if (!existingPOs.has(poNo) && poGroups[poNo]) {
-				const group = poGroups[poNo];
-				console.debug('[VendorDeptModule][AutoImport] Importing group for PO:', poNo, group);
+			const normalizedPoNo = String(poNo).trim().toUpperCase();
+			if (!existingPOs.has(normalizedPoNo) && poGroups[normalizedPoNo]) {
+				const group = poGroups[normalizedPoNo];
+				console.debug('[VendorDeptModule][AutoImport] Importing group for PO:', poNo, '(normalized:', normalizedPoNo, ')', group);
 				
 				// Map purchase items to VendorDeptItem format, filling all available fields
 				const items = group.map((item: any) => {
@@ -1333,8 +1464,31 @@ useEffect(() => {
 		if (added) {
 			console.debug('[VendorDeptModule][AutoImport] Imported new orders:', newOrders);
 			setOrders(newOrders);
-			// CRITICAL FIX: Only save to vendorDeptData, NEVER to purchaseOrders
-			localStorage.setItem('vendorDeptData', JSON.stringify(newOrders));
+			// CRITICAL: Also reload and merge from localStorage to prevent overwriting recent updates
+			try {
+				const current = localStorage.getItem('vendorDeptData');
+				if (current) {
+					const currentOrders = JSON.parse(current);
+					// Merge: keep all current orders and add only the new ones that don't conflict
+					// Use normalized (uppercase) PO numbers for case-insensitive comparison
+					const merged = [...currentOrders];
+					newOrders.forEach((newOrder: any) => {
+						// Check if this PO already exists in current (case-insensitive)
+						const newOrderPoNormalized = String(newOrder.materialPurchasePoNo).trim().toUpperCase();
+						const exists = merged.some(o => String(o.materialPurchasePoNo).trim().toUpperCase() === newOrderPoNormalized);
+						if (!exists) {
+							merged.push(newOrder);
+						}
+					});
+					localStorage.setItem('vendorDeptData', JSON.stringify(merged));
+					console.debug('[VendorDeptModule][AutoImport] Merged with existing orders in localStorage');
+				} else {
+					localStorage.setItem('vendorDeptData', JSON.stringify(newOrders));
+				}
+			} catch (err) {
+				console.error('[VendorDeptModule][AutoImport] Error merging with localStorage:', err);
+				localStorage.setItem('vendorDeptData', JSON.stringify(newOrders));
+			}
 		}
 	}, [purchasePOs]);
 
@@ -2053,6 +2207,8 @@ const handleVSIRUpdate = (event?: any) => {
 					</select>
 				</div>
 				<div style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+					<label>Order Place Date (from PSIR):</label>
+					<input type="text" value={newOrder.orderPlaceDate} readOnly style={{ padding: '6px', border: '1px solid #ccc', borderRadius: 4, background: '#f0f0f0' }} />
 					<label>OA NO:</label>
 					<input type="text" value={newOrder.oaNo} readOnly style={{ padding: '6px', border: '1px solid #ccc', borderRadius: 4, background: '#f0f0f0' }} />
 					<label>Batch No:</label>
@@ -2084,6 +2240,7 @@ const handleVSIRUpdate = (event?: any) => {
 						style={{ fontWeight: 'bold', background: '#fff', width: 160, border: '2px solid #1976d2', color: '#1976d2' }}
 					/>
 				</div>
+
 				<div style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
 					<label>Item Name:</label>
 					{itemNames.length > 0 ? (
@@ -2114,76 +2271,33 @@ const handleVSIRUpdate = (event?: any) => {
 					<input placeholder="Item Code" value={itemInput.itemCode} onChange={e => setItemInput({ ...itemInput, itemCode: e.target.value })} readOnly={itemNames.length > 0} />
 					<input placeholder="Material Issue No" value={itemInput.materialIssueNo} onChange={e => setItemInput({ ...itemInput, materialIssueNo: e.target.value })} />
 					<input type="number" placeholder="Qty" value={itemInput.qty || ''} onChange={e => setItemInput({ ...itemInput, qty: Number(e.target.value) })} />
-					<select value={itemInput.indentStatus} onChange={e => setItemInput({ ...itemInput, indentStatus: e.target.value })} style={{ display: 'none' }}>
+					<select value={itemInput.indentStatus} onChange={e => setItemInput({ ...itemInput, indentStatus: e.target.value })} >
 						<option value="">Indent Status</option>
 						{indentStatusOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
 					</select>
-					<input type="number" placeholder="Received Qty (manual)" value={itemInput.receivedQty || ''} onChange={e => setItemInput({ ...itemInput, receivedQty: Number(e.target.value) })} style={{ display: 'none' }} />
-					<input type="number" placeholder="OK Qty" value={itemInput.okQty || ''} onChange={e => setItemInput({ ...itemInput, okQty: Number(e.target.value) })} style={{ display: 'none' }} />
-					<input type="number" placeholder="Rework Qty" value={itemInput.reworkQty || ''} onChange={e => setItemInput({ ...itemInput, reworkQty: Number(e.target.value) })} style={{ display: 'none' }} />
-					<input type="number" placeholder="Rejected Qty" value={itemInput.rejectedQty || ''} onChange={e => setItemInput({ ...itemInput, rejectedQty: Number(e.target.value) })} style={{ display: 'none' }} />
-					<input placeholder="GRN No" value={itemInput.grnNo} onChange={e => setItemInput({ ...itemInput, grnNo: e.target.value })} style={{ display: 'none' }} />
-					<input placeholder="Debit Note or Qty Returned" value={itemInput.debitNoteOrQtyReturned} onChange={e => setItemInput({ ...itemInput, debitNoteOrQtyReturned: e.target.value })} style={{ display: 'none' }} />
-					<input placeholder="Remarks" value={itemInput.remarks} onChange={e => setItemInput({ ...itemInput, remarks: e.target.value })} style={{ display: 'none' }} />
+					<input type="number" placeholder="Received Qty" value={itemInput.receivedQty || ''} onChange={e => setItemInput({ ...itemInput, receivedQty: Number(e.target.value) })} />
+					<input type="number" placeholder="OK Qty" value={itemInput.okQty || ''} onChange={e => setItemInput({ ...itemInput, okQty: Number(e.target.value) })} />
+					<input type="number" placeholder="Rework Qty" value={itemInput.reworkQty || ''} onChange={e => setItemInput({ ...itemInput, reworkQty: Number(e.target.value) })} />
+					<input type="number" placeholder="Rejected Qty" value={itemInput.rejectedQty || ''} onChange={e => setItemInput({ ...itemInput, rejectedQty: Number(e.target.value) })} />
+					<input placeholder="GRN No" value={itemInput.grnNo} onChange={e => setItemInput({ ...itemInput, grnNo: e.target.value })} />
+					<input placeholder="Debit Note or Qty Returned" value={itemInput.debitNoteOrQtyReturned} onChange={e => setItemInput({ ...itemInput, debitNoteOrQtyReturned: e.target.value })} />
+					<input placeholder="Remarks" value={itemInput.remarks} onChange={e => setItemInput({ ...itemInput, remarks: e.target.value })} />
 					<button onClick={handleSaveItem}>
 						{editIdx ? 'Update Item' : 'Add Item'}
 					</button>
 				</div>
-				{newOrder.items.length > 0 && (
-					<table border={1} cellPadding={6} style={{ width: '100%', marginBottom: 16 }}>
-						<thead>
-							<tr>
-								<th>Item Name</th>
-								<th>Item Code</th>
-								<th>Material Issue No</th>
-								<th>Qty</th>
-								<th>Indent Status</th>
-								<th>Closing Stock</th>
-								<th>Received Qty</th>
-								<th>OK Qty</th>
-								<th>Rework Qty</th>
-								<th>Rejected Qty</th>
-								<th>GRN No</th>
-								<th>Debit Note or Qty Returned</th>
-								<th>Remarks</th>
-								<th>Edit</th>
-							</tr>
-						</thead>
-						<tbody>
-							{newOrder.items.map((item, idx) => (
-								<tr key={idx}>
-									<td>{item.itemName}</td>
-									<td>{item.itemCode}</td>
-									<td>{item.materialIssueNo}</td>
-									<td>{Math.abs(item.qty)}</td>
-									<td>{item.indentStatus}</td>
-									<td>{getClosingStock(item.itemCode, item.itemName)}</td>
-									<td>{item.receivedQty}</td>
-									<td>{item.okQty}</td>
-									<td>{item.reworkQty}</td>
-									<td>{item.rejectedQty}</td>
-									<td>{item.grnNo}</td>
-									<td>{item.debitNoteOrQtyReturned}</td>
-									<td>{item.remarks}</td>
-									<td>
-										<button
-											style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 12px', cursor: 'pointer' }}
-											onClick={() => {
-												setItemInput({ ...item, indentStatus: (function(){ const p = getIndentStatusFromPurchase(newOrder.materialPurchasePoNo, item.itemCode, item.materialIssueNo || ''); if (p) return p && p.toUpperCase ? p.toUpperCase() : String(p); return (item.indentStatus || '').toUpperCase(); })() });
-												setEditIdx({ orderIdx: 0, itemIdx: idx });
-											}}
-										>
-											Edit
-										</button>
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				)}
+
 				<button onClick={editOrderIdx !== null ? handleUpdateOrder : handleAddOrder}>
 					{editOrderIdx !== null ? 'Update Vendor Dept Order' : 'Add Vendor Dept Order'}
 				</button>
+				{editOrderIdx !== null && (
+					<button onClick={() => {
+						clearNewOrder();
+						setEditOrderIdx(null);
+					}} style={{ background: '#757575', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', cursor: 'pointer', marginLeft: 8 }}>
+						Cancel
+					</button>
+				)}
 				<h3>Vendor Dept Orders</h3>
 				<div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
 						<button

@@ -45,7 +45,7 @@ const LoginPage: React.FC<{ onLogin: (user: any) => void }> = ({ onLogin }) => {
         alignItems: 'center',
       }}>
         <img src="/vite.svg" alt="Logo" style={{ width: 64, marginBottom: 18 }} />
-        <h2 style={{ color: '#1a237e', fontWeight: 700, marginBottom: 18, fontSize: 28, letterSpacing: 1 }}>Welcome to ACU ERP</h2>
+        <h2 style={{ color: '#1a237e', fontWeight: 700, marginBottom: 18, fontSize: 28, letterSpacing: 1 }}>Welcome to Airtech Inventory ERP System</h2>
         <form onSubmit={handleLogin} style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
           <input
             type="email"
@@ -93,7 +93,7 @@ const LoginPage: React.FC<{ onLogin: (user: any) => void }> = ({ onLogin }) => {
           {error && <div style={{ color: '#d32f2f', marginTop: 8, textAlign: 'center', fontWeight: 500 }}>{error}</div>}
         </form>
         <div style={{ marginTop: 24, color: '#3949ab', fontSize: 15, textAlign: 'center', opacity: 0.8 }}>
-          <span>ACU ERP System &copy; {new Date().getFullYear()}</span>
+          <span>Airtech Inventory ERP System &copy; {new Date().getFullYear()}</span>
         </div>
       </div>
     </div>

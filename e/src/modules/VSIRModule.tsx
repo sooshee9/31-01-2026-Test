@@ -4,6 +4,7 @@ import bus from '../utils/eventBus';
 interface VSRIRecord {
   id: number;
   receivedDate: string;
+  indentNo: string;
   poNo: string;
   oaNo: string;
   purchaseBatchNo: string;
@@ -25,6 +26,7 @@ const LOCAL_STORAGE_KEY = 'vsri-records';
 
 const VSRI_MODULE_FIELDS = [
   { key: 'receivedDate', label: 'Received Date', type: 'date' },
+  { key: 'indentNo', label: 'Indent No', type: 'text' },
   { key: 'poNo', label: 'PO No', type: 'text' },
   { key: 'oaNo', label: 'OA No', type: 'text' },
   { key: 'purchaseBatchNo', label: 'Purchase Batch No', type: 'text' },
@@ -48,6 +50,7 @@ const VSIRModule: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [itemInput, setItemInput] = useState<Omit<VSRIRecord, 'id'>>({
     receivedDate: '',
+    indentNo: '',
     poNo: '',
     oaNo: '',
     purchaseBatchNo: '',
@@ -149,6 +152,55 @@ const VSIRModule: React.FC = () => {
     setIsInitialized(true);
   }, []);
 
+  // Auto-fill Indent No from PSIR for all records that have poNo but missing indentNo
+  useEffect(() => {
+    if (!isInitialized || records.length === 0) {
+      return;
+    }
+
+    try {
+      const psirDataRaw = localStorage.getItem('psirData');
+      if (!psirDataRaw) {
+        console.log('[VSIR] No PSIR data found for batch auto-fill');
+        return;
+      }
+
+      const psirData = JSON.parse(psirDataRaw);
+      if (!Array.isArray(psirData)) {
+        return;
+      }
+
+      console.log('[VSIR] Auto-filling Indent No from PSIR for all records');
+      let updated = false;
+      const updatedRecords = records.map(record => {
+        // Only auto-fill if poNo exists but indentNo is missing or empty
+        if (record.poNo && (!record.indentNo || record.indentNo.trim() === '')) {
+          console.log('[VSIR] Looking for PO No:', record.poNo);
+          
+          for (const psir of psirData) {
+            if (psir.poNo && psir.poNo.toString().trim() === record.poNo.toString().trim()) {
+              const indentNo = psir.indentNo || '';
+              if (indentNo && indentNo !== record.indentNo) {
+                console.log('[VSIR] ✓ Found PSIR record. Setting Indent No:', indentNo, 'for PO No:', record.poNo);
+                updated = true;
+                return { ...record, indentNo };
+              }
+              break;
+            }
+          }
+        }
+        return record;
+      });
+
+      if (updated) {
+        console.log('[VSIR] Updated records with Indent No from PSIR');
+        setRecords(updatedRecords);
+      }
+    } catch (e) {
+      console.error('[VSIR] Error auto-filling indent no:', e);
+    }
+  }, [isInitialized]);
+
   // Persist records (but skip on initial mount)
   useEffect(() => {
     if (!isInitialized) {
@@ -234,6 +286,40 @@ const VSIRModule: React.FC = () => {
       bus.removeEventListener('vendorDept.updated', handleVendorDeptUpdate);
     };
   }, [records]);
+
+  // Auto-fill Indent No from PSIR when PO No changes
+  useEffect(() => {
+    if (!itemInput.poNo) {
+      return;
+    }
+
+    try {
+      const psirDataRaw = localStorage.getItem('psirData');
+      if (!psirDataRaw) {
+        console.log('[VSIR] No PSIR data found for indent auto-fill');
+        return;
+      }
+
+      const psirData = JSON.parse(psirDataRaw);
+      if (!Array.isArray(psirData)) {
+        console.log('[VSIR] PSIR data is not an array');
+        return;
+      }
+
+      console.log('[VSIR] Looking for PO No:', itemInput.poNo, 'in PSIR data');
+      for (const psir of psirData) {
+        if (psir.poNo && psir.poNo.toString().trim() === itemInput.poNo.toString().trim()) {
+          const indentNo = psir.indentNo || '';
+          console.log('[VSIR] Found PSIR record with PO No:', itemInput.poNo, 'Indent No:', indentNo);
+          setItemInput(prev => ({ ...prev, indentNo }));
+          return;
+        }
+      }
+      console.log('[VSIR] No matching PSIR record found for PO No:', itemInput.poNo);
+    } catch (e) {
+      console.error('[VSIR] Error auto-filling indent no:', e);
+    }
+  }, [itemInput.poNo]);
 
   // Auto-import from purchaseData (run once)
   useEffect(() => {
