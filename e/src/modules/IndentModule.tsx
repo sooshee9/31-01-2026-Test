@@ -191,14 +191,15 @@ const IndentModule: React.FC = () => {
     }
   };
 
-  // FIXED: Enhanced function
-  const getAvailableStockForIndent = (itemCode: string, indentIndex: number, itemQty: number) => {
+  // FIXED: Enhanced function (prefixed with underscore because it's not used directly)
+  const _getAvailableStockForIndent = (itemCode: string, indentIndex: number, itemQty: number) => {
     const totalStock = getStock(itemCode);
     const previousAllocatedQty = getCumulativeAllocatedQtyUpTo(itemCode, indentIndex);
     const availableBefore = totalStock - previousAllocatedQty;
     const availableAfter = availableBefore - (Number(itemQty) || 0);
     return availableAfter;
   };
+  void _getAvailableStockForIndent;
 
   // FIXED: Enhanced allocation function
   const getAllocatedAvailableForIndent = (itemCode: string, indentIndex: number, itemQty: number) => {
@@ -212,13 +213,15 @@ const IndentModule: React.FC = () => {
   };
 
   // FIXED: Calculate status - CLOSED only when availableBefore >= requested qty
-  const getIndentStatus = (itemCode: string, indentIndex: number, itemQty: number) => {
+  const _getIndentStatus = (itemCode: string, indentIndex: number, itemQty: number) => {
     const totalStock = getStock(itemCode);
     const previousAllocatedQty = getCumulativeAllocatedQtyUpTo(itemCode, indentIndex);
     const availableBefore = totalStock - previousAllocatedQty;
     
     return availableBefore >= (Number(itemQty) || 0);
   };
+  void _getIndentStatus;
+
 
   // Calculate remaining stock after all allocations
   const getRemainingStock = (itemCode: string) => {

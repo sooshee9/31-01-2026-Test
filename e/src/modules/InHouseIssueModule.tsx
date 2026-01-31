@@ -100,8 +100,8 @@ const InHouseIssueModule: React.FC = () => {
   const [psirBatchNos, setPsirBatchNos] = useState<string[]>([]);
   const [vsirBatchNos, setVsirBatchNos] = useState<string[]>([]);
   const [stockQuantities, setStockQuantities] = useState<string[]>([]);
-  const [vendors, setVendors] = useState<string[]>([]);
-  const [vendorBatchNos, setVendorBatchNos] = useState<string[]>([]);
+  const [, setVendors] = useState<string[]>([]);
+  const [, setVendorBatchNos] = useState<string[]>([]);
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
 
   // Helper: Get batch numbers for selected vendor
@@ -562,6 +562,7 @@ const InHouseIssueModule: React.FC = () => {
         newIssues.push({
           reqNo: '',
           reqDate: '',
+          indentNo: '',
           oaNo: '',
           poNo: poNo,
           vendor: purchaseOrder?.supplierName || '',
@@ -668,7 +669,7 @@ const InHouseIssueModule: React.FC = () => {
     const updated = issues.map((issue, idx) => idx === editIssueIdx ? newIssue : issue);
     setIssues(updated);
     localStorage.setItem('inHouseIssueData', JSON.stringify(updated));
-    setNewIssue({ reqNo: getNextReqNo(updated), reqDate: '', oaNo: '', poNo: '', vendor: '', purchaseBatchNo: '', vendorBatchNo: '', issueNo: getNextIssueNo(updated), items: [] });
+    setNewIssue({ reqNo: getNextReqNo(updated), reqDate: '', indentNo: '', oaNo: '', poNo: '', vendor: '', purchaseBatchNo: '', vendorBatchNo: '', issueNo: getNextIssueNo(updated), items: [] });
     setItemInput({ itemName: '', itemCode: '', transactionType: 'Purchase', batchNo: '', issueQty: 0, reqBy: '', inStock: 0, reqClosed: false, receivedDate: new Date().toISOString().slice(0, 10) });
     setEditIssueIdx(null);
   };
@@ -682,7 +683,7 @@ const InHouseIssueModule: React.FC = () => {
     const updated = [...issues, { ...newIssue, issueNo }];
     setIssues(updated);
     localStorage.setItem('inHouseIssueData', JSON.stringify(updated));
-    setNewIssue({ reqNo: getNextReqNo(updated), reqDate: '', oaNo: '', poNo: '', vendor: '', purchaseBatchNo: '', vendorBatchNo: '', issueNo: getNextIssueNo(updated), items: [] });
+    setNewIssue({ reqNo: getNextReqNo(updated), reqDate: '', indentNo: '', oaNo: '', poNo: '', vendor: '', purchaseBatchNo: '', vendorBatchNo: '', issueNo: getNextIssueNo(updated), items: [] });
     setItemInput({ itemName: '', itemCode: '', transactionType: 'Purchase', batchNo: '', issueQty: 0, reqBy: '', inStock: 0, reqClosed: false, receivedDate: new Date().toISOString().slice(0, 10) });
   };
 
@@ -701,6 +702,7 @@ const InHouseIssueModule: React.FC = () => {
   // Get batch details (OK Qty and Reject Qty) based on selected batch
   // Calculate already issued qty for a batch number
   const getIssuedQtyForBatch = (batchNo: string, transactionType: string, itemCode: string): number => {
+    void transactionType;
     try {
       let totalIssued = 0;
       

@@ -1030,6 +1030,7 @@ useEffect(() => {
 			setItemInput({ itemName: '', itemCode: '', materialIssueNo: '', qty: 0, closingStock: '', indentStatus: '', receivedQty: 0, okQty: 0, reworkQty: 0, rejectedQty: 0, grnNo: '', debitNoteOrQtyReturned: '', remarks: '' });
 		}
 	};
+	void handleDeleteCurrentItem; 
 
 	const handleAddOrder = () => {
 		// Debug: log the new order before saving
@@ -2043,6 +2044,7 @@ const handleVSIRUpdate = (event?: any) => {
 			return 0;
 		}
 	};
+	void getStockTotal;
 
 	// Return the Closing Stock (or computed fallback) for the matched stock record, using the same logic as the stock debug
 	const getClosingStock = (itemCode?: string, itemName?: string): number | string => {
@@ -2060,6 +2062,7 @@ const handleVSIRUpdate = (event?: any) => {
 
 			let matchedRecord: any = null;
 			let matchedBy = 'none';
+			void matchedBy;
 			const codeNorm = norm(itemCode || '');
 			const nameNorm = norm(itemName || '');
 // Prefer exact itemCode match (choose best)

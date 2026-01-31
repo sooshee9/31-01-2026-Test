@@ -20,7 +20,7 @@ const getVendorIssuedQtyTotal = (itemCode: string) => {
   }
 };
 // Get running total of In-House Issued Qty for an itemCode from all in-house issues
-const getInHouseIssuedQtyTotal = (itemCode: string) => {
+const _getInHouseIssuedQtyTotal = (itemCode: string) => {
   try {
     const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
     return inHouseIssues.reduce((total: number, issue: any) => {
@@ -40,6 +40,7 @@ const getInHouseIssuedQtyTotal = (itemCode: string) => {
     return 0;
   }
 };
+
 
 // Get running total of In-House Issued Qty for an itemCode filtered by transaction type
 const getInHouseIssuedQtyByTransactionType = (itemCode: string, transactionType: string) => {
@@ -178,7 +179,7 @@ const getAdjustedVendorIssuedQty = (itemCode: string) => {
 };
 
 // Get in-house issued qty by batch number from IN-House Issue Module
-const getInHouseIssuedQtyByBatch = (batchNo: string) => {
+const _getInHouseIssuedQtyByBatch = (batchNo: string) => {
   try {
     const inHouseIssues = JSON.parse(localStorage.getItem("inHouseIssueData") || "[]");
     return inHouseIssues.reduce((total: number, issue: any) => {
@@ -198,6 +199,8 @@ const getInHouseIssuedQtyByBatch = (batchNo: string) => {
     return 0;
   }
 };
+void _getInHouseIssuedQtyTotal;
+void _getInHouseIssuedQtyByBatch;
 import React, { useState, useEffect } from "react";
 import bus from '../utils/eventBus';
 
@@ -343,7 +346,7 @@ const StockModule: React.FC = () => {
   const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
   const [draftPsirItems, setDraftPsirItems] = useState<any[]>([]);
   const [lastPsirEventAt, setLastPsirEventAt] = useState<string>('');
-  const [lastPsirDetail, setLastPsirDetail] = useState<any>(null);
+  const [, setLastPsirDetail] = useState<any>(null);
   const [lastStorageEventAt, setLastStorageEventAt] = useState<string>('');
   const [showDebugPanel, setShowDebugPanel] = useState<boolean>(true);
   const [debugInfo, setDebugInfo] = useState<any>(null);
@@ -494,7 +497,7 @@ const StockModule: React.FC = () => {
   };
 
   // Get adjusted Pur Store OK Qty (PSIR OK Qty - In-House Issued Purchase - Vendor Issued Qty)
-  const getAdjustedPurStoreOkQty = (itemName: string, itemCode?: string, batchNo?: string) => {
+  const getAdjustedPurStoreOkQty = (itemName: string, itemCode?: string, _batchNo?: string) => {
     const psirOkQty = getPSIROkQtyTotal(itemName, itemCode) || 0;
     
     // Subtract in-house issued quantities where transactionType='Purchase'

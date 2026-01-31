@@ -121,6 +121,7 @@ const VSIRModule: React.FC = () => {
               cur.push({
                 id: Date.now() + Math.floor(Math.random() * 10000),
                 receivedDate: issue.date || '',
+                indentNo: '',
                 poNo: issue.materialPurchasePoNo || '',
                 oaNo: issue.oaNo || '',
                 purchaseBatchNo: issue.batchNo || '',
@@ -357,6 +358,7 @@ const VSIRModule: React.FC = () => {
           newRecords.push({
             id: Date.now() + Math.floor(Math.random() * 10000),
             receivedDate: '',
+            indentNo: '',
             poNo: order.poNo,
             oaNo,
             purchaseBatchNo: batchNo,
@@ -412,6 +414,7 @@ const VSIRModule: React.FC = () => {
               cur.push({
                 id: Date.now() + Math.floor(Math.random() * 10000),
                 receivedDate: issue.date || '',
+                indentNo: '',
                 poNo: issue.materialPurchasePoNo || '',
                 oaNo: issue.oaNo || '',
                 purchaseBatchNo: issue.batchNo || '',
@@ -739,6 +742,7 @@ const VSIRModule: React.FC = () => {
     // Reset form
     setItemInput({
       receivedDate: '',
+      indentNo: '',
       poNo: '',
       oaNo: '',
       purchaseBatchNo: '',

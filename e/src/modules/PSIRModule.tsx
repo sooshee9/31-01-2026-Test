@@ -568,7 +568,7 @@ const PSIRModule: React.FC = () => {
       setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
     }
     
-    setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', invoiceNo: '', supplierName: '', items: [] });
+    setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', oaNo: '', batchNo: '', invoiceNo: '', supplierName: '', items: [] });
     setItemInput({ itemName: '', itemCode: '', qtyReceived: 0, okQty: 0, rejectQty: 0, grnNo: '', remarks: '' });
     setEditPSIRIdx(null);
   };
@@ -602,7 +602,7 @@ const PSIRModule: React.FC = () => {
     setPsirs(updated);
     localStorage.setItem('psirData', JSON.stringify(updated));
     try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
-    setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', invoiceNo: '', supplierName: '', items: [] });
+    setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', oaNo: '', batchNo: '', invoiceNo: '', supplierName: '', items: [] });
     setItemInput({ itemName: '', itemCode: '', qtyReceived: 0, okQty: 0, rejectQty: 0, grnNo: '', remarks: '' });
     setEditPSIRIdx(null);
   };
