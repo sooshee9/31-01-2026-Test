@@ -32,13 +32,24 @@ export const useUserRole = (user: User | null) => {
         if (userDoc.exists()) {
           setUserProfile(userDoc.data() as UserProfile);
         } else {
-          // If user doc doesn't exist, create a default viewer profile
+          // If user doc doesn't exist, create a default profile.
+          // Special-case: make a configured UID an admin immediately.
+          const isSeededAdmin = user.uid === '4OzW9GTwokTOnza0A0e4DNclJ6H2';
           const defaultProfile: UserProfile = {
             email: user.email || '',
-            role: 'viewer',
-            permissions: [],
+            role: isSeededAdmin ? 'admin' : 'viewer',
+            permissions: isSeededAdmin ? [] : [],
             displayName: user.displayName || 'User',
+            createdAt: new Date(),
           };
+          try {
+            // Persist the user profile for future logins
+            (async () => {
+              await import('firebase/firestore').then(({ setDoc, doc }) => setDoc(doc(db, 'users', user.uid), defaultProfile));
+            })();
+          } catch (err) {
+            console.error('Failed to create user profile in Firestore:', err);
+          }
           setUserProfile(defaultProfile);
         }
         setError(null);

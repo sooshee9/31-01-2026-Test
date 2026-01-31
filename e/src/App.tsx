@@ -34,6 +34,10 @@ const modules: Record<string, React.ReactElement> = {
 function App() {
   const [activeModule, setActiveModule] = useState<'sales' | 'dc' | 'acuInventory' | 'acuInventoryDashboard' | 'purchase' | 'salesDashboard' | 'debitNote' | 'indent' | 'vendorDept' | 'vendorIssue' | 'inHouseIssue' | 'psir' | 'vsir' | 'stock' | 'itemMaster'>('purchase');
   const [user, setUser] = useState<any>(null);
+  // Hook to fetch and create role/profile
+  const { userProfile } = require('./hooks/useUserRole').useUserRole(user);
+  // Hook to sync user data with Firestore (on login)
+  require('./hooks/useUserDataSync').useUserDataSync(user);
 
   if (!user) {
     return <LoginPage onLogin={setUser} />;
