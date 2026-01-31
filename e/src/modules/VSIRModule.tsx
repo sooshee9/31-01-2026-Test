@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
+import { subscribePsirs } from '../utils/psirService';
 import bus from '../utils/eventBus';
 
 interface VSRIRecord {
@@ -159,47 +162,67 @@ const VSIRModule: React.FC = () => {
       return;
     }
 
-    try {
-      const psirDataRaw = localStorage.getItem('psirData');
-      if (!psirDataRaw) {
-        console.log('[VSIR] No PSIR data found for batch auto-fill');
-        return;
-      }
+    // Try Firestore realtime PSIRs when logged in, fall back to localStorage
+    let unsub: (() => void) | null = null;
+    const authUnsub = onAuthStateChanged(auth, (u) => {
+      if (!u) {
+        try {
+          const psirDataRaw = localStorage.getItem('psirData');
+          if (!psirDataRaw) return;
+          const psirData = JSON.parse(psirDataRaw);
+          if (!Array.isArray(psirData)) return;
 
-      const psirData = JSON.parse(psirDataRaw);
-      if (!Array.isArray(psirData)) {
-        return;
-      }
-
-      console.log('[VSIR] Auto-filling Indent No from PSIR for all records');
-      let updated = false;
-      const updatedRecords = records.map(record => {
-        // Only auto-fill if poNo exists but indentNo is missing or empty
-        if (record.poNo && (!record.indentNo || record.indentNo.trim() === '')) {
-          console.log('[VSIR] Looking for PO No:', record.poNo);
-          
-          for (const psir of psirData) {
-            if (psir.poNo && psir.poNo.toString().trim() === record.poNo.toString().trim()) {
-              const indentNo = psir.indentNo || '';
-              if (indentNo && indentNo !== record.indentNo) {
-                console.log('[VSIR] ✓ Found PSIR record. Setting Indent No:', indentNo, 'for PO No:', record.poNo);
-                updated = true;
-                return { ...record, indentNo };
+          console.log('[VSIR] Auto-filling Indent No from local psirData');
+          let updated = false;
+          const updatedRecords = records.map(record => {
+            if (record.poNo && (!record.indentNo || record.indentNo.trim() === '')) {
+              for (const psir of psirData) {
+                if (psir.poNo && psir.poNo.toString().trim() === record.poNo.toString().trim()) {
+                  const indentNo = psir.indentNo || '';
+                  if (indentNo && indentNo !== record.indentNo) {
+                    updated = true;
+                    return { ...record, indentNo };
+                  }
+                  break;
+                }
               }
-              break;
+            }
+            return record;
+          });
+
+          if (updated) setRecords(updatedRecords);
+        } catch (e) { console.error('[VSIR] Error auto-filling indent no from local', e); }
+        return;
+      }
+
+      unsub = subscribePsirs(u.uid, docs => {
+        const psirData = docs.map(d => ({ ...d })) as any[];
+        console.log('[VSIR] Auto-filling Indent No from Firestore PSIRs');
+        let updated = false;
+        const updatedRecords = records.map(record => {
+          if (record.poNo && (!record.indentNo || record.indentNo.trim() === '')) {
+            for (const psir of psirData) {
+              if (psir.poNo && psir.poNo.toString().trim() === record.poNo.toString().trim()) {
+                const indentNo = psir.indentNo || '';
+                if (indentNo && indentNo !== record.indentNo) {
+                  updated = true;
+                  return { ...record, indentNo };
+                }
+                break;
+              }
             }
           }
-        }
-        return record;
-      });
+          return record;
+        });
 
-      if (updated) {
-        console.log('[VSIR] Updated records with Indent No from PSIR');
-        setRecords(updatedRecords);
-      }
-    } catch (e) {
-      console.error('[VSIR] Error auto-filling indent no:', e);
-    }
+        if (updated) setRecords(updatedRecords);
+      });
+    });
+
+    return () => {
+      if (unsub) unsub();
+      try { authUnsub(); } catch {}
+    };
   }, [isInitialized]);
 
   // Persist records (but skip on initial mount)

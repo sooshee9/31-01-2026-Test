@@ -48,7 +48,7 @@ export const useUserDataSync = (user: any) => {
       const remote = await getUserData(uid);
 
       // If remote missing, create from localStorage snapshot (so current device becomes canonical)
-      const keysPresent = Object.keys(localStorage).length > 0 ? Array.from({ length: 0 }) : [];
+      const keysPresent: string[] = Object.keys(localStorage).length > 0 ? Object.keys(localStorage) : [];
       const initialKeys = DEFAULT_KEYS.concat(keysPresent).filter(Boolean);
 
       if (!remote) {

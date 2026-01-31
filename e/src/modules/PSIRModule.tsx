@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import bus from '../utils/eventBus';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
+import { addPsir, updatePsir, subscribePsirs } from '../utils/psirService';
 
 interface PSIRItem {
   itemName: string;
@@ -13,6 +16,8 @@ interface PSIRItem {
 }
 
 interface PSIR {
+  id?: string;
+  userId?: string;
   receivedDate: string;
   indentNo: string;
   poNo: string;
@@ -21,6 +26,8 @@ interface PSIR {
   invoiceNo: string;
   supplierName: string;
   items: PSIRItem[];
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 interface PurchaseOrder {
@@ -85,6 +92,34 @@ const PSIRModule: React.FC = () => {
   const [psirDebugOpen, setPsirDebugOpen] = useState<boolean>(false);
   const [psirDebugOutput, setPsirDebugOutput] = useState<string>('');
   const [psirDebugExtra, setPsirDebugExtra] = useState<string>('');
+
+  // Current authenticated user's UID (if logged in)
+  const [userUid, setUserUid] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUserUid(u ? u.uid : null));
+    return () => unsub();
+  }, []);
+
+  // Subscribe to Firestore PSIRs for the logged-in user and apply realtime updates
+  useEffect(() => {
+    let unsub: (() => void) | null = null;
+    if (!userUid) return;
+    unsub = subscribePsirs(userUid, (docs) => {
+      const newPsirs = docs.map(d => ({ ...d })) as any[];
+      // normalize items array
+      const normalized = newPsirs.map((psir: any) => ({ ...psir, items: Array.isArray(psir.items) ? psir.items : [] }));
+      setPsirs(normalized);
+      const existingPOs = new Set(normalized.map((psir: any) => psir.poNo).filter(Boolean));
+      const existingIndents = new Set(normalized.map((psir: any) => `INDENT::${psir.indentNo}`).filter(id => id !== 'INDENT::'));
+      setProcessedPOs(new Set([...existingPOs, ...existingIndents]));
+      console.debug('[PSIRModule][Firestore] Subscribed and applied PSIR docs', normalized.length);
+    });
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [userUid]);
 
   // Enhanced auto-fill from Purchase Order when PO No changes
   useEffect(() => {
@@ -555,19 +590,32 @@ const PSIRModule: React.FC = () => {
     }
     
     const normalizedItems = psirToSave.items.map(it => ({ ...it, poQty: getPOQtyFor(psirToSave.poNo, psirToSave.indentNo, it.itemCode) }));
-    const updated = [...psirs, { ...psirToSave, items: normalizedItems }];
-    setPsirs(updated);
-    localStorage.setItem('psirData', JSON.stringify(updated));
-    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
-    
-    // Add to processed POs
-    if (psirToSave.poNo) {
-      setProcessedPOs(prev => new Set([...prev, psirToSave.poNo]));
+
+    if (userUid) {
+      // Persist to Firestore; subscription will update local state when write completes
+      (async () => {
+        try {
+          await addPsir(userUid, { ...psirToSave, items: normalizedItems });
+          // processedPOs will be updated from onSnapshot data
+        } catch (e) {
+          console.error('[PSIRModule] Failed to add PSIR to Firestore, falling back to localStorage', e);
+          const updated = [...psirs, { ...psirToSave, items: normalizedItems }];
+          setPsirs(updated);
+          localStorage.setItem('psirData', JSON.stringify(updated));
+          try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
+          if (psirToSave.poNo) setProcessedPOs(prev => new Set([...prev, psirToSave.poNo]));
+          if (psirToSave.indentNo) setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
+        }
+      })();
+    } else {
+      const updated = [...psirs, { ...psirToSave, items: normalizedItems }];
+      setPsirs(updated);
+      localStorage.setItem('psirData', JSON.stringify(updated));
+      try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
+      if (psirToSave.poNo) setProcessedPOs(prev => new Set([...prev, psirToSave.poNo]));
+      if (psirToSave.indentNo) setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
     }
-    if (psirToSave.indentNo) {
-      setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
-    }
-    
+
     setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', oaNo: '', batchNo: '', invoiceNo: '', supplierName: '', items: [] });
     setItemInput({ itemName: '', itemCode: '', qtyReceived: 0, okQty: 0, rejectQty: 0, grnNo: '', remarks: '' });
     setEditPSIRIdx(null);
@@ -598,10 +646,29 @@ const PSIRModule: React.FC = () => {
       console.log('[PSIR] handleUpdatePSIR - generated batchNo:', psirToSave.batchNo);
     }
     
-    const updated = psirs.map((psir, idx) => (idx === editPSIRIdx ? { ...psirToSave, items: psirToSave.items.map(it => ({ ...it, poQty: getPOQtyFor(psirToSave.poNo, psirToSave.indentNo, it.itemCode) })) } : psir));
-    setPsirs(updated);
-    localStorage.setItem('psirData', JSON.stringify(updated));
-    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
+    const updatedLocal = psirs.map((psir, idx) => (idx === editPSIRIdx ? { ...psirToSave, items: psirToSave.items.map(it => ({ ...it, poQty: getPOQtyFor(psirToSave.poNo, psirToSave.indentNo, it.itemCode) })) } : psir));
+
+    const target = psirs[editPSIRIdx!];
+    const docId = target && (target as any).id;
+
+    if (userUid && docId) {
+      (async () => {
+        try {
+          await updatePsir(docId, { ...psirToSave, items: psirToSave.items.map(it => ({ ...it, poQty: getPOQtyFor(psirToSave.poNo, psirToSave.indentNo, it.itemCode) })) });
+          // onSnapshot will update local state
+        } catch (e) {
+          console.error('[PSIRModule] Failed to update PSIR in Firestore, falling back to local update', e);
+          setPsirs(updatedLocal);
+          localStorage.setItem('psirData', JSON.stringify(updatedLocal));
+          try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updatedLocal } })); } catch (err) {}
+        }
+      })();
+    } else {
+      setPsirs(updatedLocal);
+      localStorage.setItem('psirData', JSON.stringify(updatedLocal));
+      try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updatedLocal } })); } catch (err) {}
+    }
+
     setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', oaNo: '', batchNo: '', invoiceNo: '', supplierName: '', items: [] });
     setItemInput({ itemName: '', itemCode: '', qtyReceived: 0, okQty: 0, rejectQty: 0, grnNo: '', remarks: '' });
     setEditPSIRIdx(null);

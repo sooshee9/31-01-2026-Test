@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import bus from '../utils/eventBus';
 
 const formatTime = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
